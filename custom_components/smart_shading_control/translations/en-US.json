@@ -1,0 +1,877 @@
+{
+  "title": "Smart Shading Control",
+  "config": {
+    "step": {
+      "global": {
+        "title": "Central settings",
+        "description": "These settings apply to all rooms. East, south and west are derived automatically from the north-facade azimuth.",
+        "data": {
+          "sun_entity": "Sun entity",
+          "weather_entity": "Weather entity",
+          "workday_entity": "Workday sensor (optional)",
+          "outside_temperature_sensor": "Outdoor temperature sensor (optional)",
+          "irradiance_sensor": "Solar irradiance sensor in W/m² (optional)",
+          "illuminance_sensor": "Illuminance sensor in lx (optional)",
+          "azimuth_north": "Geographic north-facade azimuth",
+          "min_sun_elevation": "Minimum sun elevation",
+          "sun_half_angle": "Facade incidence half-angle",
+          "frost_threshold": "Automatic frost threshold",
+          "forecast_hours": "Forecast horizon",
+          "evaluation_interval": "Evaluation interval",
+          "wind_sensor": "Wind sensor (optional)",
+          "rain_sensor": "Rain sensor (optional)",
+          "wind_protection_enabled": "Enable wind and storm protection",
+          "rain_protection_enabled": "Enable rain protection",
+          "frost_protection_enabled": "Enable frost protection",
+          "wind_threshold": "Wind threshold",
+          "storm_threshold": "Storm threshold",
+          "frost_action": "Frost behavior",
+          "protection_activation_delay": "Protection activation delay",
+          "protection_release_delay": "Protection release delay",
+          "sun_event_source": "Sunrise/sunset source",
+          "dst_nonexistent_policy": "Nonexistent time during DST transition",
+          "dst_ambiguous_policy": "Ambiguous time during DST transition"
+        },
+        "data_description": {
+          "workday_entity": "Optional binary sensor provided by Home Assistant's Workday integration. It enables separate rules for workdays and days off/public holidays.",
+          "azimuth_north": "0° is geographic north. East, south and west are derived automatically as +90°, +180° and +270°."
+        }
+      },
+      "room": {
+        "title": "Create a new room",
+        "description": "Set the room and its temperature sensor.",
+        "data": {
+          "room_name": "Room name",
+          "room_temperature_sensor": "Room temperature sensor"
+        }
+      },
+      "covers": {
+        "title": "Covers in this room",
+        "description": "Assign every cover to exactly one building side.",
+        "data": {
+          "covers_north": "North-side covers",
+          "covers_east": "East-side covers",
+          "covers_south": "South-side covers",
+          "covers_west": "West-side covers"
+        }
+      },
+      "cover_contact": {
+        "title": "Contact for “{cover}”",
+        "description": "Cover {number} of {total}. The window/door contact is optional and affects only this cover.",
+        "data": {
+          "opening_contact": "Window/door contact (optional)"
+        }
+      },
+      "behavior": {
+        "title": "Temperatures and movement behavior",
+        "description": "Set temperature thresholds, movement limits, manual override behavior and tilt activation. Target positions are configured in the next step.",
+        "data": {
+          "comfort_temperature": "Comfort temperature",
+          "heat_temperature": "Heat protection temperature",
+          "strong_heat_temperature": "Strong heat protection temperature",
+          "forecast_threshold": "Outdoor forecast threshold",
+          "window_safe_position": "Safety position for an open contact",
+          "tilted_min_position": "Minimum opening for a tilted contact",
+          "min_position_change": "Minimum position change",
+          "min_move_interval": "Minimum interval between automatic movements",
+          "manual_override_minutes": "Manual override duration (no later than the next day change)",
+          "risk_hysteresis": "Heat risk hysteresis",
+          "failsafe_profile": "Fail-safe profile for unknown contact",
+          "failsafe_position": "Fail-safe safety position",
+          "dry_run": "Dry run without cover commands",
+          "persist_manual_overrides": "Keep manual overrides across restarts",
+          "tilt_control_enabled": "Enable slat tilt control"
+        },
+        "data_description": {
+          "manual_override_minutes": "This room value can be adjusted individually. Saving the global lock duration again will replace it with the global value."
+        }
+      },
+      "initial_time_rules": {
+        "title": "Time rules for this room",
+        "description": "Create individual movement events. Each rule opens or closes the selected covers at one trigger time. You may also save the room without a time rule.",
+        "menu_options": {
+          "add_initial_time_rule": "Add another time rule",
+          "finish_room": "Save room"
+        }
+      },
+      "initial_rule_basics": {
+        "title": "Time rule – basics",
+        "description": "This movement rule applies to this room. Close holds the covers at the configured time-rule closing position until the next matching Open event ends the rule.",
+        "data": {
+          "name": "Time rule name",
+          "action": "Movement action",
+          "day_type": "Workday validity",
+          "priority": "Priority",
+          "monday": "Monday",
+          "tuesday": "Tuesday",
+          "wednesday": "Wednesday",
+          "thursday": "Thursday",
+          "friday": "Friday",
+          "saturday": "Saturday",
+          "sunday": "Sunday",
+          "covers": "Affected covers in this room"
+        },
+        "data_description": {
+          "day_type": "Independent of the Workday sensor, workdays only, or days off/public holidays only.",
+          "priority": "If multiple rules stored in the room affect the same cover at the same instant, the higher priority wins. With equal priority, the stored rule order decides.",
+          "action": "Close starts the scheduled closing state and moves to the time-rule closing position. Open ends it, moves to the open position, and then releases dynamic shading."
+        }
+      },
+      "initial_rule_trigger": {
+        "title": "Time rule – trigger",
+        "description": "Choose a fixed time, sunrise or sunset.",
+        "data": {
+          "trigger_reference": "Trigger type"
+        }
+      },
+      "initial_rule_trigger_value": {
+        "title": "Time rule – trigger value",
+        "description": "For a sun event, a negative offset is before and a positive offset is after the event.",
+        "data": {
+          "trigger_time": "Trigger time",
+          "trigger_offset_minutes": "Sun-event offset in minutes"
+        }
+      },
+      "global_positions": {
+        "title": "Global position defaults",
+        "description": "Set the default values for new rooms. Each room then stores independent position values and can be adjusted separately. 0% means fully closed and 100% fully open.",
+        "data": {
+          "open_position": "Open position",
+          "time_rule_close_position": "Time-rule / night-closing position",
+          "preventive_position": "Preventive shading position",
+          "heat_position": "Heat protection position",
+          "strong_heat_position": "Strong heat protection position",
+          "wind_safe_position": "Wind safety position",
+          "storm_safe_position": "Storm safety position",
+          "rain_safe_position": "Rain safety position",
+          "frost_safe_position": "Frost safety position",
+          "tilt_default_position": "Default tilt position",
+          "tilt_heat_position": "Heat-protection tilt position",
+          "tilt_strong_heat_position": "Strong-heat tilt position",
+          "tilt_safety_position": "Safety tilt position"
+        }
+      },
+      "positions": {
+        "title": "Positions for this room",
+        "description": "These values are stored in this room. Saving the central position values again replaces every position value in this room. Afterwards they can be customized here again. 0% means fully closed and 100% fully open.",
+        "data": {
+          "open_position": "Open position",
+          "time_rule_close_position": "Time-rule / night-closing position",
+          "preventive_position": "Preventive shading position",
+          "heat_position": "Heat protection position",
+          "strong_heat_position": "Strong heat protection position",
+          "wind_safe_position": "Wind safety position",
+          "storm_safe_position": "Storm safety position",
+          "rain_safe_position": "Rain safety position",
+          "frost_safe_position": "Frost safety position",
+          "tilt_default_position": "Default tilt position",
+          "tilt_heat_position": "Heat-protection tilt position",
+          "tilt_strong_heat_position": "Strong-heat tilt position",
+          "tilt_safety_position": "Safety tilt position"
+        },
+        "data_description": {
+          "time_rule_close_position": "This position is used by every time rule with the Close action, especially night closing.",
+          "wind_safe_position": "Used only when wind protection is enabled.",
+          "storm_safe_position": "Used only when wind and storm protection is enabled.",
+          "rain_safe_position": "Used only when rain protection is enabled.",
+          "frost_safe_position": "Used only when frost protection and the Frost action Safety position are enabled."
+        }
+      },
+      "global_manual_override": {
+        "title": "Global manual-operation lock duration",
+        "description": "Set the default duration for manual overrides. New rooms inherit this value as their template.",
+        "data": {
+          "global_manual_override_minutes": "Global lock duration (no later than the next day change)"
+        }
+      }
+    },
+    "error": {
+      "no_covers": "Select at least one cover.",
+      "duplicate_cover": "A cover was assigned to more than one building side.",
+      "temperature_order": "The order must be comfort temperature < heat protection < strong heat protection.",
+      "position_order": "The order must be open ≥ preventive ≥ heat protection ≥ strong heat protection.",
+      "rule_name_required": "Enter a name for the time rule.",
+      "rule_day_type_invalid": "The workday/day-off selection is invalid.",
+      "workday_sensor_required": "Select a Workday sensor in the central settings before using this condition.",
+      "rule_weekday_required": "Select at least one weekday.",
+      "rule_cover_required": "Select at least one cover from this room.",
+      "rule_reference_invalid": "The trigger selection is invalid.",
+      "rule_time_invalid": "The time or minute offset is invalid.",
+      "rule_cover_outside_room": "A selected cover does not belong to this room.",
+      "cover_in_other_room": "At least one cover is already controlled by another Smart Shading Control room.",
+      "storm_below_wind": "The storm threshold must be greater than or equal to the wind threshold.",
+      "rule_action_invalid": "The selected movement action is invalid.",
+      "rule_no_weekdays": "Select at least one weekday.",
+      "rule_conflict_opposite_action": "An opposite movement action already exists for the same covers at the same time.",
+      "rule_conflict_duplicate": "An identical time rule already exists.",
+      "integration_cover_not_allowed": "Room or individual controls created by Smart Shading Control cannot be selected as physical covers.",
+      "global_position_order_conflict": "The selected global transfers would violate open ≥ preventive ≥ heat protection ≥ strong heat protection in at least one room. Transfer the related values as well or adjust the template."
+    }
+  },
+  "options": {
+    "step": {
+      "global_menu": {
+        "title": "Central settings",
+        "description": "Choose central sensors and building parameters or manage values for all rooms. Saving central values replaces the corresponding room values; individual rooms can then be customized again.",
+        "menu_options": {
+          "global_settings": "Sensors and building orientation",
+          "global_positions": "Position values for all rooms",
+          "global_manual_override": "Manual-operation lock duration for all rooms",
+          "add_global_time_rule": "Create a new time rule for all rooms"
+        }
+      },
+      "room_menu": {
+        "title": "Room settings",
+        "description": "All settings in this area apply only to the selected room.",
+        "menu_options": {
+          "room": "Room and temperature sensor",
+          "covers": "Covers and window/door contacts",
+          "behavior": "Temperatures and movement behavior",
+          "positions": "Positions for this room",
+          "room_time_rules": "Time rules for this room"
+        }
+      },
+      "global_settings": {
+        "title": "Central settings",
+        "description": "These settings apply to all rooms. East, south and west are derived automatically from the north-facade azimuth.",
+        "data": {
+          "sun_entity": "Sun entity",
+          "weather_entity": "Weather entity",
+          "workday_entity": "Workday sensor (optional)",
+          "outside_temperature_sensor": "Outdoor temperature sensor (optional)",
+          "irradiance_sensor": "Solar irradiance sensor in W/m² (optional)",
+          "illuminance_sensor": "Illuminance sensor in lx (optional)",
+          "azimuth_north": "Geographic north-facade azimuth",
+          "min_sun_elevation": "Minimum sun elevation",
+          "sun_half_angle": "Facade incidence half-angle",
+          "frost_threshold": "Automatic frost threshold",
+          "forecast_hours": "Forecast horizon",
+          "evaluation_interval": "Evaluation interval",
+          "wind_sensor": "Wind sensor (optional)",
+          "rain_sensor": "Rain sensor (optional)",
+          "wind_protection_enabled": "Enable wind and storm protection",
+          "rain_protection_enabled": "Enable rain protection",
+          "frost_protection_enabled": "Enable frost protection",
+          "wind_threshold": "Wind threshold",
+          "storm_threshold": "Storm threshold",
+          "frost_action": "Frost behavior",
+          "protection_activation_delay": "Protection activation delay",
+          "protection_release_delay": "Protection release delay",
+          "sun_event_source": "Sunrise/sunset source",
+          "dst_nonexistent_policy": "Nonexistent time during DST transition",
+          "dst_ambiguous_policy": "Ambiguous time during DST transition"
+        },
+        "data_description": {
+          "workday_entity": "Optional binary sensor provided by Home Assistant's Workday integration. It enables separate rules for workdays and days off/public holidays.",
+          "azimuth_north": "0° is geographic north. East, south and west are derived automatically as +90°, +180° and +270°."
+        }
+      },
+      "room": {
+        "title": "Create a new room",
+        "description": "Set the room and its temperature sensor.",
+        "data": {
+          "room_name": "Room name",
+          "room_temperature_sensor": "Room temperature sensor"
+        }
+      },
+      "covers": {
+        "title": "Covers in this room",
+        "description": "Assign every cover to exactly one building side.",
+        "data": {
+          "covers_north": "North-side covers",
+          "covers_east": "East-side covers",
+          "covers_south": "South-side covers",
+          "covers_west": "West-side covers"
+        }
+      },
+      "cover_contact": {
+        "title": "Contact for “{cover}”",
+        "description": "Cover {number} of {total}. The window/door contact is optional and affects only this cover.",
+        "data": {
+          "opening_contact": "Window/door contact (optional)"
+        }
+      },
+      "behavior": {
+        "title": "Temperatures and movement behavior",
+        "description": "Set temperature thresholds, movement limits, manual override behavior and tilt activation. Target positions are in the separate Positions for this room menu.",
+        "data": {
+          "comfort_temperature": "Comfort temperature",
+          "heat_temperature": "Heat protection temperature",
+          "strong_heat_temperature": "Strong heat protection temperature",
+          "forecast_threshold": "Outdoor forecast threshold",
+          "window_safe_position": "Safety position for an open contact",
+          "tilted_min_position": "Minimum opening for a tilted contact",
+          "min_position_change": "Minimum position change",
+          "min_move_interval": "Minimum interval between automatic movements",
+          "manual_override_minutes": "Manual override duration (no later than the next day change)",
+          "risk_hysteresis": "Heat risk hysteresis",
+          "failsafe_profile": "Fail-safe profile for unknown contact",
+          "failsafe_position": "Fail-safe safety position",
+          "dry_run": "Dry run without cover commands",
+          "persist_manual_overrides": "Keep manual overrides across restarts",
+          "tilt_control_enabled": "Enable slat tilt control"
+        },
+        "data_description": {
+          "manual_override_minutes": "This room value can be adjusted individually. Saving the global lock duration again will replace it with the global value."
+        }
+      },
+      "room_time_rules": {
+        "title": "Time rules for this room",
+        "description": "These movement rules are executed only from this room. Newly created central rules are appended here as additional room rules and can afterwards be edited or deleted individually.",
+        "menu_options": {
+          "add_room_time_rule": "Add time rule for this room",
+          "edit_room_time_rule": "Edit time rule for this room",
+          "delete_room_time_rule": "Delete time rule for this room",
+          "back_room_menu": "Back to room settings"
+        }
+      },
+      "edit_room_time_rule": {
+        "title": "Edit this room's time rule",
+        "description": "Select a time rule from this room.",
+        "data": {
+          "selected_rule": "Room time rule"
+        }
+      },
+      "delete_room_time_rule": {
+        "title": "Delete this room's time rule",
+        "description": "Select the room time rule to delete.",
+        "data": {
+          "selected_rule": "Room time rule"
+        }
+      },
+      "confirm_delete_room_rule": {
+        "title": "Delete room time rule",
+        "description": "Confirm permanent deletion of the selected room time rule.",
+        "data": {
+          "confirm_delete": "Confirm deletion"
+        }
+      },
+      "global_rule_basics": {
+        "title": "Time rule – basics",
+        "description": "Completing this wizard appends an independent room rule to every existing room. It is not stored globally and can afterwards only be edited or deleted inside the respective room.",
+        "data": {
+          "name": "Time rule name",
+          "action": "Movement action",
+          "day_type": "Workday validity",
+          "priority": "Priority",
+          "monday": "Monday",
+          "tuesday": "Tuesday",
+          "wednesday": "Wednesday",
+          "thursday": "Thursday",
+          "friday": "Friday",
+          "saturday": "Saturday",
+          "sunday": "Sunday"
+        },
+        "data_description": {
+          "day_type": "Independent of the Workday sensor, workdays only, or days off/public holidays only.",
+          "priority": "If multiple rules stored in the room affect the same cover at the same instant, the higher priority wins. With equal priority, the stored rule order decides.",
+          "action": "Close starts the scheduled closing state and moves to the effective time-rule closing position. Open ends it, moves to the open position, and then releases dynamic shading."
+        }
+      },
+      "room_rule_basics": {
+        "title": "Time rule – basics",
+        "description": "This movement rule applies only to this room. Close holds the selected covers at the effective time-rule closing position until a matching Open event ends the state.",
+        "data": {
+          "name": "Time rule name",
+          "action": "Movement action",
+          "day_type": "Workday validity",
+          "priority": "Priority",
+          "monday": "Monday",
+          "tuesday": "Tuesday",
+          "wednesday": "Wednesday",
+          "thursday": "Thursday",
+          "friday": "Friday",
+          "saturday": "Saturday",
+          "sunday": "Sunday",
+          "covers": "Affected covers in this room"
+        },
+        "data_description": {
+          "day_type": "Independent of the Workday sensor, workdays only, or days off/public holidays only.",
+          "priority": "If multiple rules stored in the room affect the same cover at the same instant, the higher priority wins. With equal priority, the stored rule order decides.",
+          "action": "Close starts the scheduled closing state and moves to the effective time-rule closing position. Open ends it, moves to the open position, and then releases dynamic shading.",
+          "covers": "Select the covers in this room to which this locally stored rule applies."
+        }
+      },
+      "global_rule_trigger": {
+        "title": "Time rule – trigger",
+        "description": "Choose a fixed time, sunrise or sunset.",
+        "data": {
+          "trigger_reference": "Trigger type"
+        }
+      },
+      "global_rule_trigger_value": {
+        "title": "Time rule – trigger value",
+        "description": "For a sun event, a negative offset is before and a positive offset is after the event.",
+        "data": {
+          "trigger_time": "Trigger time",
+          "trigger_offset_minutes": "Sun-event offset in minutes"
+        }
+      },
+      "room_rule_trigger": {
+        "title": "Time rule – trigger",
+        "description": "Choose a fixed time, sunrise or sunset.",
+        "data": {
+          "trigger_reference": "Trigger type"
+        }
+      },
+      "room_rule_trigger_value": {
+        "title": "Time rule – trigger value",
+        "description": "For a sun event, a negative offset is before and a positive offset is after the event.",
+        "data": {
+          "trigger_time": "Trigger time",
+          "trigger_offset_minutes": "Sun-event offset in minutes"
+        }
+      },
+      "global_positions": {
+        "title": "Global position values for all rooms",
+        "description": "Saving writes every position value to every existing room and replaces its previous room values. Each room can then be customized again. Saving here again later overwrites the position values in all rooms again.",
+        "data": {
+          "transfer_all_positions": "Transfer all position values to every room",
+          "open_position": "Open position",
+          "transfer_open_position": "Transfer open position to every room",
+          "time_rule_close_position": "Time-rule / night-closing position",
+          "transfer_time_rule_close_position": "Transfer time-rule / night-closing position to every room",
+          "preventive_position": "Preventive shading position",
+          "transfer_preventive_position": "Transfer preventive shading position to every room",
+          "heat_position": "Heat protection position",
+          "transfer_heat_position": "Transfer heat protection position to every room",
+          "strong_heat_position": "Strong heat protection position",
+          "transfer_strong_heat_position": "Transfer strong heat protection position to every room",
+          "wind_safe_position": "Wind safety position",
+          "transfer_wind_safe_position": "Transfer wind safety position to every room",
+          "storm_safe_position": "Storm safety position",
+          "transfer_storm_safe_position": "Transfer storm safety position to every room",
+          "rain_safe_position": "Rain safety position",
+          "transfer_rain_safe_position": "Transfer rain safety position to every room",
+          "frost_safe_position": "Frost safety position",
+          "transfer_frost_safe_position": "Transfer frost safety position to every room",
+          "tilt_default_position": "Default tilt position",
+          "transfer_tilt_default_position": "Transfer default tilt position to every room",
+          "tilt_heat_position": "Heat-protection tilt position",
+          "transfer_tilt_heat_position": "Transfer heat-protection tilt position to every room",
+          "tilt_strong_heat_position": "Strong-heat tilt position",
+          "transfer_tilt_strong_heat_position": "Transfer strong-heat tilt position to every room",
+          "tilt_safety_position": "Safety tilt position",
+          "transfer_tilt_safety_position": "Transfer safety tilt position to every room"
+        },
+        "data_description": {
+          "transfer_all_positions": "Enabled: Saving copies every defined position value into every existing room.",
+          "transfer_open_position": "Enabled: Saving copies this single value into every existing room. It can then be changed again in each room.",
+          "transfer_time_rule_close_position": "Enabled: Saving copies this single value into every existing room. It can then be changed again in each room.",
+          "transfer_preventive_position": "Enabled: Saving copies this single value into every existing room. It can then be changed again in each room.",
+          "transfer_heat_position": "Enabled: Saving copies this single value into every existing room. It can then be changed again in each room.",
+          "transfer_strong_heat_position": "Enabled: Saving copies this single value into every existing room. It can then be changed again in each room.",
+          "transfer_wind_safe_position": "Enabled: Saving copies this single value into every existing room. It can then be changed again in each room.",
+          "transfer_storm_safe_position": "Enabled: Saving copies this single value into every existing room. It can then be changed again in each room.",
+          "transfer_rain_safe_position": "Enabled: Saving copies this single value into every existing room. It can then be changed again in each room.",
+          "transfer_frost_safe_position": "Enabled: Saving copies this single value into every existing room. It can then be changed again in each room.",
+          "transfer_tilt_default_position": "Enabled: Saving copies this single value into every existing room. It can then be changed again in each room.",
+          "transfer_tilt_heat_position": "Enabled: Saving copies this single value into every existing room. It can then be changed again in each room.",
+          "transfer_tilt_strong_heat_position": "Enabled: Saving copies this single value into every existing room. It can then be changed again in each room.",
+          "transfer_tilt_safety_position": "Enabled: Saving copies this single value into every existing room. It can then be changed again in each room."
+        }
+      },
+      "positions": {
+        "title": "Positions for this room",
+        "description": "These values are stored in this room. Saving the central position values again replaces every position value in this room. Afterwards they can be customized here again. 0% means fully closed and 100% fully open.",
+        "data": {
+          "open_position": "Open position",
+          "time_rule_close_position": "Time-rule / night-closing position",
+          "preventive_position": "Preventive shading position",
+          "heat_position": "Heat protection position",
+          "strong_heat_position": "Strong heat protection position",
+          "wind_safe_position": "Wind safety position",
+          "storm_safe_position": "Storm safety position",
+          "rain_safe_position": "Rain safety position",
+          "frost_safe_position": "Frost safety position",
+          "tilt_default_position": "Default tilt position",
+          "tilt_heat_position": "Heat-protection tilt position",
+          "tilt_strong_heat_position": "Strong-heat tilt position",
+          "tilt_safety_position": "Safety tilt position"
+        },
+        "data_description": {
+          "time_rule_close_position": "This position is used by every time rule with the Close action, especially night closing.",
+          "wind_safe_position": "Used only when wind protection is enabled.",
+          "storm_safe_position": "Used only when wind and storm protection is enabled.",
+          "rain_safe_position": "Used only when rain protection is enabled.",
+          "frost_safe_position": "Used only when frost protection and the Frost action Safety position are enabled."
+        }
+      },
+      "global_manual_override": {
+        "title": "Global lock duration for all rooms",
+        "description": "Saving writes this value to every existing room and replaces its previous lock duration. Each room can then be adjusted individually again. Saving here again later overwrites the room values again.",
+        "data": {
+          "global_manual_override_minutes": "Manual-operation lock duration (no later than the next day change)"
+        }
+      }
+    },
+    "error": {
+      "no_covers": "Select at least one cover.",
+      "duplicate_cover": "A cover was assigned to more than one building side.",
+      "temperature_order": "The order must be comfort temperature < heat protection < strong heat protection.",
+      "position_order": "The order must be open ≥ preventive ≥ heat protection ≥ strong heat protection.",
+      "rule_name_required": "Enter a name for the time rule.",
+      "rule_day_type_invalid": "The workday/day-off selection is invalid.",
+      "workday_sensor_required": "Select a Workday sensor in the central settings before using this condition.",
+      "rule_weekday_required": "Select at least one weekday.",
+      "rule_cover_required": "Select at least one cover from this room.",
+      "rule_reference_invalid": "The trigger selection is invalid.",
+      "rule_time_invalid": "The time or minute offset is invalid.",
+      "rule_cover_outside_room": "A selected cover does not belong to this room.",
+      "cover_in_other_room": "At least one cover is already controlled by another Smart Shading Control room.",
+      "storm_below_wind": "The storm threshold must be greater than or equal to the wind threshold.",
+      "rule_action_invalid": "The selected movement action is invalid.",
+      "rule_no_weekdays": "Select at least one weekday.",
+      "rule_conflict_opposite_action": "An opposite movement action already exists for the same covers at the same time.",
+      "rule_conflict_duplicate": "An identical time rule already exists.",
+      "integration_cover_not_allowed": "Room or individual controls created by Smart Shading Control cannot be selected as physical covers.",
+      "global_position_order_conflict": "The selected global transfers would violate open ≥ preventive ≥ heat protection ≥ strong heat protection in at least one room. Transfer the related values as well or adjust the template."
+    }
+  },
+  "selector": {
+    "time_reference": {
+      "options": {
+        "fixed_time": "Fixed time",
+        "sunrise": "Sunrise",
+        "sunset": "Sunset"
+      }
+    },
+    "day_type": {
+      "options": {
+        "any_day": "Independent of workday/holiday",
+        "workday": "Workdays only",
+        "non_workday": "Days off and public holidays only"
+      }
+    },
+    "failsafe_profile": {
+      "options": {
+        "block": "Block only",
+        "stop": "Stop and block",
+        "open": "Stop and fully open",
+        "safe_position": "Stop and move to safety position"
+      }
+    },
+    "frost_action": {
+      "options": {
+        "block": "Block automatic movement",
+        "safe_position": "Move to safety position"
+      }
+    },
+    "sun_event_source": {
+      "options": {
+        "location": "Home Assistant location",
+        "configured_entity": "Configured sun entity"
+      }
+    },
+    "dst_nonexistent_policy": {
+      "options": {
+        "shift_forward": "Shift to first valid time",
+        "skip": "Skip the rule boundary"
+      }
+    },
+    "dst_ambiguous_policy": {
+      "options": {
+        "first": "Use first occurrence",
+        "second": "Use second occurrence"
+      }
+    },
+    "time_rule_action": {
+      "options": {
+        "open": "Open",
+        "close": "Close"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "status": {
+        "name": "Control status",
+        "state": {
+          "disabled": "Disabled",
+          "paused": "Paused",
+          "contact_protection": "Contact protection",
+          "tilted_limit": "Tilt protection",
+          "contact_unknown": "Contact state unknown",
+          "frost_block": "Frost lock",
+          "manual_override": "Manual override",
+          "schedule": "Time rule",
+          "strong_heat": "Strong heat protection",
+          "heat_protection": "Heat protection",
+          "preventive": "Preventive shading",
+          "solar_gain": "Solar gain",
+          "normal": "Normal",
+          "unavailable": "Unavailable",
+          "failsafe": "Fail-safe active",
+          "frost_protection": "Frost protection",
+          "rain_protection": "Rain protection",
+          "wind_protection": "Wind protection",
+          "storm_protection": "Storm protection",
+          "dry_run": "Dry run"
+        }
+      },
+      "heat_risk": {
+        "name": "Heat risk"
+      },
+      "sun_load": {
+        "name": "Solar load"
+      },
+      "reason_code": {
+        "name": "Decision reason",
+        "state": {
+          "initializing": "Initializing",
+          "no_covers": "No covers configured",
+          "control_disabled": "Control disabled",
+          "mode_pause": "Pause mode",
+          "mode_open": "Open mode",
+          "mode_closed": "Closed mode",
+          "mode_heat_protection": "Heat-protection mode",
+          "contact_closing_protection": "Closing protection by contact active",
+          "contact_tilted_safety": "Tilted-contact safety active",
+          "contact_unknown_block": "Unknown contact – movement blocked",
+          "contact_unknown_stop": "Unknown contact – movement stopped",
+          "contact_unknown_open": "Unknown contact – fully opened",
+          "contact_unknown_safe_position": "Unknown contact – safety position",
+          "all_manual_override": "All affected covers manually overridden",
+          "storm_protection": "Storm protection active",
+          "wind_protection": "Wind protection active",
+          "rain_protection": "Rain protection active",
+          "frost_protection": "Frost protection active",
+          "dry_run": "Dry run – no cover commands",
+          "dynamic_strong_heat": "Dynamic: strong heat protection",
+          "dynamic_heat_protection": "Dynamic: heat protection",
+          "dynamic_preventive": "Dynamic: preventive shading",
+          "dynamic_solar_gain": "Dynamic: solar gain",
+          "dynamic_normal": "Dynamic: no shading required",
+          "time_rule_event": "Time rule triggered",
+          "time_rule_open_retry": "Scheduled opening is being retried",
+          "time_rule_closed": "Closed by time rule",
+          "time_rule_close_blocked_contact": "Night closing blocked by open contact",
+          "time_rule_close_contact_delay": "Night closing waiting after contact closed"
+        }
+      },
+      "decision_diagnostics": {
+        "name": "Decision diagnostics",
+        "state": {
+          "initializing": "Initializing",
+          "no_covers": "No covers configured",
+          "control_disabled": "Control disabled",
+          "mode_pause": "Pause mode",
+          "mode_open": "Open mode",
+          "mode_closed": "Closed mode",
+          "mode_heat_protection": "Heat-protection mode",
+          "contact_closing_protection": "Closing protection by contact active",
+          "contact_tilted_safety": "Tilted-contact safety active",
+          "contact_unknown_block": "Unknown contact – movement blocked",
+          "contact_unknown_stop": "Unknown contact – movement stopped",
+          "contact_unknown_open": "Unknown contact – fully opened",
+          "contact_unknown_safe_position": "Unknown contact – safety position",
+          "all_manual_override": "All affected covers manually overridden",
+          "storm_protection": "Storm protection active",
+          "wind_protection": "Wind protection active",
+          "rain_protection": "Rain protection active",
+          "frost_protection": "Frost protection active",
+          "dry_run": "Dry run – no cover commands",
+          "dynamic_strong_heat": "Dynamic: strong heat protection",
+          "dynamic_heat_protection": "Dynamic: heat protection",
+          "dynamic_preventive": "Dynamic: preventive shading",
+          "dynamic_solar_gain": "Dynamic: solar gain",
+          "dynamic_normal": "Dynamic: no shading required",
+          "time_rule_event": "Time rule triggered",
+          "time_rule_open_retry": "Scheduled opening is being retried",
+          "time_rule_closed": "Closed by time rule",
+          "time_rule_close_blocked_contact": "Night closing blocked by open contact",
+          "time_rule_close_contact_delay": "Night closing waiting after contact closed"
+        }
+      },
+      "forecast_age": {
+        "name": "Weather forecast age"
+      },
+      "pending_time_rule_open_count": {
+        "name": "Pending scheduled openings"
+      },
+      "provider_failures": {
+        "name": "Consecutive provider failures"
+      },
+      "command_queue_depth": {
+        "name": "Command queue depth"
+      },
+      "time_rule_conflict_count": {
+        "name": "Time rule conflicts"
+      },
+      "last_successful_command": {
+        "name": "Last successful cover command"
+      },
+      "last_provider_error": {
+        "name": "Last provider error"
+      },
+      "next_provider_retry": {
+        "name": "Next provider retry"
+      },
+      "pending_time_rule_close_count": {
+        "name": "Pending night closings"
+      },
+      "next_time_rule_close_retry": {
+        "name": "Next night-close retry"
+      },
+      "contact_state": {
+        "name": "Contact {window}",
+        "state": {
+          "closed": "Closed",
+          "tilted": "Tilted",
+          "open": "Open",
+          "unknown": "Unknown"
+        },
+        "state_attributes": {
+          "source_entity_id": {
+            "name": "Source sensor"
+          },
+          "source_state": {
+            "name": "Source state"
+          },
+          "assigned_covers": {
+            "name": "Assigned covers"
+          },
+          "assigned_cover_names": {
+            "name": "Assigned cover names"
+          }
+        }
+      },
+      "room_temperature": {
+        "name": "Temperature",
+        "state_attributes": {
+          "source_entity_id": {
+            "name": "Source sensor"
+          },
+          "source_state": {
+            "name": "Source state"
+          },
+          "source_unit": {
+            "name": "Source unit"
+          }
+        }
+      }
+    },
+    "binary_sensor": {
+      "direct_sun": {
+        "name": "Direct sun"
+      },
+      "heat_protection_active": {
+        "name": "Heat protection active"
+      },
+      "provider_degraded": {
+        "name": "Cover provider degraded"
+      },
+      "forecast_stale": {
+        "name": "Weather forecast stale"
+      },
+      "pending_time_rule_open": {
+        "name": "Scheduled opening pending"
+      },
+      "command_queue_busy": {
+        "name": "Command queue active"
+      }
+    },
+    "switch": {
+      "control_enabled": {
+        "name": "Control enabled"
+      }
+    },
+    "select": {
+      "mode": {
+        "name": "Operating mode",
+        "state": {
+          "automatic": "Automatic",
+          "heat_protection": "Heat protection",
+          "open": "Open",
+          "closed": "Closed",
+          "pause": "Pause"
+        }
+      }
+    },
+    "button": {
+      "recalculate": {
+        "name": "Recalculate"
+      },
+      "clear_overrides": {
+        "name": "Clear manual overrides"
+      },
+      "clear_decision_log": {
+        "name": "Clear decision log"
+      }
+    },
+    "cover": {
+      "room_covers": {
+        "name": "Cover – All"
+      },
+      "individual_cover": {
+        "name": "Cover {cover}"
+      }
+    }
+  },
+  "issues": {
+    "contact_unknown": {
+      "title": "Contact state unknown",
+      "description": "Contact {entity} in room {room} is unavailable or unknown. The configured fail-safe strategy is active."
+    },
+    "cover_stop_unsupported": {
+      "title": "Emergency stop unsupported",
+      "description": "Cover {entity} in room {room} does not support stop. A moving cover cannot be actively stopped after contact loss."
+    },
+    "cover_tilt_unsupported": {
+      "title": "Tilt control unsupported",
+      "description": "Cover {entity} in room {room} does not support slat tilt control."
+    },
+    "provider_degraded": {
+      "title": "Cover provider degraded",
+      "description": "Several cover commands in room {room} failed. The integration is using adaptive retry."
+    },
+    "weather_forecast_unavailable": {
+      "title": "Weather forecast unavailable",
+      "description": "The shared hourly forecast from weather entity {entity} could not be loaded. Forecast-based evaluation is temporarily unavailable in all rooms."
+    },
+    "invalid_irradiance_unit": {
+      "title": "Invalid irradiance unit",
+      "description": "Entity {entity} uses unsupported unit {unit}. Supported units are W/m² and kW/m²."
+    },
+    "invalid_illuminance_unit": {
+      "title": "Invalid illuminance unit",
+      "description": "Entity {entity} uses unsupported unit {unit}. Supported units are lx and klx."
+    },
+    "invalid_wind_unit": {
+      "title": "Invalid wind-speed unit",
+      "description": "Entity {entity} uses unsupported unit {unit}. Supported units are km/h, m/s, mph, and kn."
+    },
+    "missing_entity": {
+      "title": "Configured entity missing",
+      "description": "Configured entity {entity} in room {room} does not exist."
+    },
+    "cover_position_unsupported": {
+      "title": "Partial position unsupported",
+      "description": "Cover {entity} in room {room} does not support percentage positions. Partial targets are safely mapped to fully open or closed."
+    },
+    "workday_unavailable": {
+      "title": "Workday sensor unavailable",
+      "description": "The globally configured Workday sensor {entity} is unavailable. Workday-dependent rules cannot be evaluated reliably."
+    },
+    "sun_event_unavailable": {
+      "title": "Sun event unavailable",
+      "description": "The globally configured sun entity {entity} does not provide all sun events required by the configured time rules. Home Assistant location data is used as fallback."
+    },
+    "duplicate_cover_assignment": {
+      "title": "Cover assigned more than once",
+      "description": "At least one of these covers is already used by another room: {covers}. Affected room: {room}."
+    },
+    "invalid_temperature_unit": {
+      "title": "Unsupported temperature unit",
+      "description": "The temperature entity {entity} uses the unsupported unit “{unit}”. Select an entity with a Home Assistant temperature unit or correct the entity configuration."
+    },
+    "workday_configuration_missing": {
+      "title": "Workday configuration missing",
+      "description": "At least one global or room-specific time rule depends on workday classification, but no global Workday sensor is configured. Select a Workday sensor or change the affected rules to “Any day”."
+    },
+    "global_missing_entity": {
+      "title": "Configured global entity missing",
+      "description": "The globally configured entity {entity} does not exist."
+    }
+  }
+}

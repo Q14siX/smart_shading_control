@@ -1,0 +1,26 @@
+{
+  "entity": {
+    "sensor": {
+      "contact_state": {
+        "default": "mdi:window-closed-variant",
+        "state": {
+          "closed": "mdi:window-closed-variant",
+          "tilted": "mdi:angle-acute",
+          "open": "mdi:window-open-variant",
+          "unknown": "mdi:window-shutter-alert"
+        }
+      },
+      "room_temperature": {
+        "default": "mdi:thermometer"
+      }
+    },
+    "cover": {
+      "room_covers": {
+        "default": "mdi:window-shutter"
+      },
+      "individual_cover": {
+        "default": "mdi:window-shutter"
+      }
+    }
+  }
+}

@@ -1,0 +1,225 @@
+"""Weather and protection runtime for Smart Shading Control."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from datetime import datetime, timedelta
+from typing import Any
+
+from homeassistant.const import ATTR_UNIT_OF_MEASUREMENT, STATE_UNAVAILABLE, STATE_UNKNOWN
+from homeassistant.core import HomeAssistant
+
+from .const import (
+    CONF_FROST_ACTION,
+    CONF_FROST_PROTECTION_ENABLED,
+    CONF_FROST_SAFE_POSITION,
+    CONF_FROST_THRESHOLD,
+    CONF_ILLUMINANCE_SENSOR,
+    CONF_IRRADIANCE_SENSOR,
+    CONF_OUTSIDE_TEMP_SENSOR,
+    CONF_PROTECTION_ACTIVATION_DELAY,
+    CONF_PROTECTION_RELEASE_DELAY,
+    CONF_RAIN_PROTECTION_ENABLED,
+    CONF_RAIN_SAFE_POSITION,
+    CONF_RAIN_SENSOR,
+    CONF_STORM_SAFE_POSITION,
+    CONF_STORM_THRESHOLD,
+    CONF_WEATHER_ENTITY,
+    CONF_WIND_PROTECTION_ENABLED,
+    CONF_WIND_SAFE_POSITION,
+    CONF_WIND_SENSOR,
+    CONF_WIND_THRESHOLD,
+    FROST_ACTION_SAFE_POSITION,
+    STATUS_FROST_BLOCK,
+    STATUS_FROST_PROTECTION,
+    STATUS_RAIN_PROTECTION,
+    STATUS_STORM_PROTECTION,
+    STATUS_WIND_PROTECTION,
+)
+from .logic import clamp, weather_factor
+from .schedule import normalize_boolean
+from .state_helpers import attribute_float, temperature_state, temperature_to_celsius
+from .units import normalize_illuminance, normalize_irradiance, normalize_wind_speed, rain_is_active
+
+ConfigProvider = Callable[[], dict[str, Any]]
+
+
+class WeatherRuntime:
+    """Read weather inputs and maintain delayed protection state."""
+
+    def __init__(self, hass: HomeAssistant, config_provider: ConfigProvider) -> None:
+        self.hass = hass
+        self._config_provider = config_provider
+        self._protection_seen_since: dict[str, datetime] = {}
+        self._protection_clear_since: dict[str, datetime] = {}
+        self.active_protection: str | None = None
+
+    @property
+    def config(self) -> dict[str, Any]:
+        return self._config_provider()
+
+    def radiation_factor(self) -> tuple[str | None, float]:
+        config = self.config
+        weather_entity = config.get(CONF_WEATHER_ENTITY)
+        weather_state = self.hass.states.get(str(weather_entity)) if weather_entity else None
+        weather_available = (
+            weather_state is not None
+            and weather_state.state not in {STATE_UNKNOWN, STATE_UNAVAILABLE}
+        )
+        condition = weather_state.state if weather_available else None
+        cloud_coverage = attribute_float(weather_state, "cloud_coverage") if weather_available else None
+
+        irradiance_entity = config.get(CONF_IRRADIANCE_SENSOR)
+        irradiance_state = self.hass.states.get(str(irradiance_entity)) if irradiance_entity else None
+        if irradiance_state is not None and irradiance_state.state not in {STATE_UNKNOWN, STATE_UNAVAILABLE}:
+            irradiance = normalize_irradiance(
+                irradiance_state.state,
+                irradiance_state.attributes.get(ATTR_UNIT_OF_MEASUREMENT),
+            )
+            if irradiance is not None:
+                return condition, clamp(irradiance / 800.0)
+
+        illuminance_entity = config.get(CONF_ILLUMINANCE_SENSOR)
+        illuminance_state = self.hass.states.get(str(illuminance_entity)) if illuminance_entity else None
+        if illuminance_state is not None and illuminance_state.state not in {STATE_UNKNOWN, STATE_UNAVAILABLE}:
+            illuminance = normalize_illuminance(
+                illuminance_state.state,
+                illuminance_state.attributes.get(ATTR_UNIT_OF_MEASUREMENT),
+            )
+            if illuminance is not None:
+                return condition, clamp(illuminance / 60000.0)
+
+        return condition, weather_factor(condition, cloud_coverage)
+
+    def wind_speed(self) -> float | None:
+        config = self.config
+        entity_id = config.get(CONF_WIND_SENSOR)
+        if entity_id:
+            state = self.hass.states.get(str(entity_id))
+            if state is None or state.state in {STATE_UNKNOWN, STATE_UNAVAILABLE}:
+                return None
+            return normalize_wind_speed(
+                state.state, state.attributes.get(ATTR_UNIT_OF_MEASUREMENT)
+            )
+        weather_entity = config.get(CONF_WEATHER_ENTITY)
+        state = self.hass.states.get(str(weather_entity)) if weather_entity else None
+        if state is None or state.state in {STATE_UNKNOWN, STATE_UNAVAILABLE}:
+            return None
+        return normalize_wind_speed(
+            state.attributes.get("wind_speed"),
+            state.attributes.get("wind_speed_unit"),
+        )
+
+    def rain_active(self, condition: str | None) -> bool | None:
+        entity_id = self.config.get(CONF_RAIN_SENSOR)
+        if entity_id:
+            state = self.hass.states.get(str(entity_id))
+            if state is None or state.state in {STATE_UNKNOWN, STATE_UNAVAILABLE}:
+                return None
+            return rain_is_active(
+                state.state, state.attributes.get(ATTR_UNIT_OF_MEASUREMENT)
+            )
+        if condition is None:
+            return None
+        return condition in {"rainy", "pouring", "lightning-rainy", "snowy-rainy"}
+
+    def outside_temperature(self) -> float | None:
+        config = self.config
+        sensor_value = temperature_state(self.hass, config.get(CONF_OUTSIDE_TEMP_SENSOR))
+        if sensor_value is not None:
+            return sensor_value
+        weather_entity = config.get(CONF_WEATHER_ENTITY)
+        weather_state = self.hass.states.get(str(weather_entity)) if weather_entity else None
+        if weather_state is None or weather_state.state in {STATE_UNKNOWN, STATE_UNAVAILABLE}:
+            return None
+        return temperature_to_celsius(
+            weather_state.attributes.get("temperature"),
+            weather_state.attributes.get("temperature_unit"),
+        )
+
+    def resolve_protection(
+        self,
+        now: datetime,
+        *,
+        outside_temperature: float | None,
+        wind_speed: float | None,
+        rain_active: bool | None,
+    ) -> tuple[str, int | None, str] | None:
+        config = self.config
+        wind_enabled = normalize_boolean(config.get(CONF_WIND_PROTECTION_ENABLED), False)
+        rain_enabled = normalize_boolean(config.get(CONF_RAIN_PROTECTION_ENABLED), False)
+        frost_enabled = normalize_boolean(config.get(CONF_FROST_PROTECTION_ENABLED), True)
+        raw: dict[str, bool | None] = {
+            "storm": (
+                None
+                if wind_enabled and wind_speed is None
+                else wind_enabled
+                and wind_speed is not None
+                and wind_speed >= float(config[CONF_STORM_THRESHOLD])
+            ),
+            "wind": (
+                None
+                if wind_enabled and wind_speed is None
+                else wind_enabled
+                and wind_speed is not None
+                and wind_speed >= float(config[CONF_WIND_THRESHOLD])
+            ),
+            "rain": (
+                None
+                if rain_enabled and rain_active is None
+                else rain_enabled and rain_active is True
+            ),
+            "frost": (
+                None
+                if frost_enabled and outside_temperature is None
+                else frost_enabled
+                and outside_temperature is not None
+                and outside_temperature <= float(config[CONF_FROST_THRESHOLD])
+            ),
+        }
+        activation = timedelta(seconds=max(0, int(config[CONF_PROTECTION_ACTIVATION_DELAY])))
+        release = timedelta(minutes=max(0, int(config[CONF_PROTECTION_RELEASE_DELAY])))
+
+        matured: set[str] = set()
+        for kind, active in raw.items():
+            if active is True:
+                self._protection_clear_since.pop(kind, None)
+                self._protection_seen_since.setdefault(kind, now)
+                if now - self._protection_seen_since[kind] >= activation:
+                    matured.add(kind)
+            elif active is False:
+                self._protection_seen_since.pop(kind, None)
+                self._protection_clear_since.setdefault(kind, now)
+            else:
+                self._protection_clear_since.pop(kind, None)
+
+        priority = ("storm", "wind", "rain", "frost")
+        selected = next((kind for kind in priority if kind in matured), None)
+        current = self.active_protection
+        if current is not None:
+            clear_since = self._protection_clear_since.get(current)
+            current_is_held = (
+                bool(raw.get(current))
+                or clear_since is None
+                or now - clear_since < release
+            )
+            if current_is_held:
+                selected_is_higher = (
+                    selected is not None
+                    and priority.index(selected) < priority.index(current)
+                )
+                if not selected_is_higher:
+                    selected = current
+
+        self.active_protection = selected
+        if selected is None:
+            return None
+        if selected == "storm":
+            return selected, int(config[CONF_STORM_SAFE_POSITION]), STATUS_STORM_PROTECTION
+        if selected == "wind":
+            return selected, int(config[CONF_WIND_SAFE_POSITION]), STATUS_WIND_PROTECTION
+        if selected == "rain":
+            return selected, int(config[CONF_RAIN_SAFE_POSITION]), STATUS_RAIN_PROTECTION
+        if str(config.get(CONF_FROST_ACTION)) == FROST_ACTION_SAFE_POSITION:
+            return selected, int(config[CONF_FROST_SAFE_POSITION]), STATUS_FROST_PROTECTION
+        return selected, None, STATUS_FROST_BLOCK

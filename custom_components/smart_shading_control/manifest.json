@@ -1,0 +1,17 @@
+{
+  "domain": "smart_shading_control",
+  "name": "Smart Shading Control",
+  "codeowners": [
+    "@Q14siX"
+  ],
+  "config_flow": true,
+  "dependencies": [
+    "sun",
+    "weather"
+  ],
+  "documentation": "https://hilfe.q14six.de/shelves/smart-shading-control",
+  "integration_type": "service",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/Q14siX/smart_shading_control/issues",
+  "version": "20260903.085028"
+}

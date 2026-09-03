@@ -1,0 +1,877 @@
+{
+  "title": "Smart Shading Control",
+  "config": {
+    "step": {
+      "global": {
+        "title": "Zentrale Einstellungen",
+        "description": "Diese Einstellungen gelten für alle Räume. Ost, Süd und West werden automatisch aus dem Azimut der Nordfassade berechnet.",
+        "data": {
+          "sun_entity": "Sonnen-Entität",
+          "weather_entity": "Wetter-Entität",
+          "workday_entity": "Workday-Sensor (optional)",
+          "outside_temperature_sensor": "Außentemperatursensor (optional)",
+          "irradiance_sensor": "Globalstrahlungssensor in W/m² (optional)",
+          "illuminance_sensor": "Helligkeitssensor in lx (optional)",
+          "azimuth_north": "Geografischer Azimut der Nordfassade",
+          "min_sun_elevation": "Minimale Sonnenhöhe",
+          "sun_half_angle": "Seitlicher Einfallswinkel je Fassade",
+          "frost_threshold": "Frostgrenze der Automatik",
+          "forecast_hours": "Prognosezeitraum",
+          "evaluation_interval": "Prüfintervall",
+          "wind_sensor": "Windsensor (optional)",
+          "rain_sensor": "Regensensor (optional)",
+          "wind_protection_enabled": "Wind- und Sturmschutz aktivieren",
+          "rain_protection_enabled": "Regenschutz aktivieren",
+          "frost_protection_enabled": "Frostschutz aktivieren",
+          "wind_threshold": "Windgrenze",
+          "storm_threshold": "Sturmgrenze",
+          "frost_action": "Verhalten bei Frost",
+          "protection_activation_delay": "Verzögerung bis Schutzaktivierung",
+          "protection_release_delay": "Nachlaufzeit bis Schutzfreigabe",
+          "sun_event_source": "Quelle für Sonnenaufgang/-untergang",
+          "dst_nonexistent_policy": "Nicht vorhandene Uhrzeit bei Zeitumstellung",
+          "dst_ambiguous_policy": "Doppelte Uhrzeit bei Zeitumstellung"
+        },
+        "data_description": {
+          "workday_entity": "Optionaler Binärsensor der Home-Assistant-Integration Workday. Er ermöglicht unterschiedliche Regeln für Arbeitstage und freie Tage beziehungsweise Feiertage.",
+          "azimuth_north": "0° entspricht geografisch Nord. Ost, Süd und West werden automatisch mit +90°, +180° und +270° berechnet."
+        }
+      },
+      "room": {
+        "title": "Neuen Raum anlegen",
+        "description": "Lege den Raum und seinen Temperatursensor fest.",
+        "data": {
+          "room_name": "Raumname",
+          "room_temperature_sensor": "Raumtemperatursensor"
+        }
+      },
+      "covers": {
+        "title": "Rollläden des Raums",
+        "description": "Ordne jeden Rollladen genau einer Gebäudeseite zu.",
+        "data": {
+          "covers_north": "Rollläden Nordseite",
+          "covers_east": "Rollläden Ostseite",
+          "covers_south": "Rollläden Südseite",
+          "covers_west": "Rollläden Westseite"
+        }
+      },
+      "cover_contact": {
+        "title": "Kontakt für „{cover}“",
+        "description": "Rollladen {number} von {total}. Der Fenster-/Türkontakt ist optional und wirkt nur auf diesen Rollladen.",
+        "data": {
+          "opening_contact": "Fenster-/Türkontakt (optional)"
+        }
+      },
+      "behavior": {
+        "title": "Temperaturen und Fahrverhalten",
+        "description": "Lege Temperaturgrenzen, Mindestbewegung, manuelle Übersteuerung und Lamellenaktivierung fest. Zielpositionen werden im nächsten Schritt eingestellt.",
+        "data": {
+          "comfort_temperature": "Komforttemperatur",
+          "heat_temperature": "Temperatur für Hitzeschutz",
+          "strong_heat_temperature": "Temperatur für starken Hitzeschutz",
+          "forecast_threshold": "Schwelle der Außentemperaturprognose",
+          "window_safe_position": "Sicherheitsposition bei geöffnetem Kontakt",
+          "tilted_min_position": "Mindestöffnung bei gekipptem Kontakt",
+          "min_position_change": "Mindeständerung der Position",
+          "min_move_interval": "Mindestabstand zwischen automatischen Fahrten",
+          "manual_override_minutes": "Dauer der manuellen Übersteuerung (spätestens bis Tageswechsel)",
+          "risk_hysteresis": "Hysterese des Hitzerisikos",
+          "failsafe_profile": "Fail-safe-Profil bei unbekanntem Kontakt",
+          "failsafe_position": "Fail-safe-Sicherheitsposition",
+          "dry_run": "Testmodus ohne Fahrbefehle",
+          "persist_manual_overrides": "Manuelle Übersteuerungen über Neustarts speichern",
+          "tilt_control_enabled": "Lamellensteuerung aktivieren"
+        },
+        "data_description": {
+          "manual_override_minutes": "Der Raumwert kann individuell angepasst werden. Beim nächsten Speichern der globalen Sperrzeit wird er jedoch wieder durch den globalen Wert ersetzt."
+        }
+      },
+      "initial_time_rules": {
+        "title": "Zeitregeln für diesen Raum",
+        "description": "Lege einzelne Fahrereignisse an. Jede Regel fährt die ausgewählten Rollläden zu einem Zeitpunkt hoch oder runter. Du kannst den Raum auch ohne Zeitregel speichern.",
+        "menu_options": {
+          "add_initial_time_rule": "Weitere Zeitregel hinzufügen",
+          "finish_room": "Raum speichern"
+        }
+      },
+      "initial_rule_basics": {
+        "title": "Zeitregel – Grundlagen",
+        "description": "Diese Fahrregel gilt für diesen Raum. Runterfahren hält die Rollläden auf der eingestellten Schließposition für Zeitregeln, bis das nächste passende Hochfahrereignis die Regel beendet.",
+        "data": {
+          "name": "Name der Zeitregel",
+          "action": "Fahraktion",
+          "day_type": "Gültigkeit nach Arbeitstag",
+          "priority": "Priorität",
+          "monday": "Montag",
+          "tuesday": "Dienstag",
+          "wednesday": "Mittwoch",
+          "thursday": "Donnerstag",
+          "friday": "Freitag",
+          "saturday": "Samstag",
+          "sunday": "Sonntag",
+          "covers": "Betroffene Rollläden dieses Raums"
+        },
+        "data_description": {
+          "day_type": "Unabhängig vom Workday-Sensor, nur an Arbeitstagen oder nur an freien Tagen beziehungsweise Feiertagen.",
+          "priority": "Wenn mehrere im Raum gespeicherte Regeln denselben Rollladen im selben Moment betreffen, gewinnt die höhere Priorität. Bei gleicher Priorität entscheidet die Reihenfolge der gespeicherten Regeln.",
+          "action": "Runterfahren startet den zeitgesteuerten Schließzustand und fährt auf die Schließposition für Zeitregeln. Hochfahren beendet ihn, fährt auf die Offenposition und gibt danach die Beschattungsautomatik frei."
+        }
+      },
+      "initial_rule_trigger": {
+        "title": "Zeitregel – Auslöser",
+        "description": "Wähle eine feste Uhrzeit, Sonnenaufgang oder Sonnenuntergang.",
+        "data": {
+          "trigger_reference": "Art des Auslösers"
+        }
+      },
+      "initial_rule_trigger_value": {
+        "title": "Zeitregel – Zeitpunkt",
+        "description": "Bei einem Sonnenereignis bedeutet ein negativer Versatz davor und ein positiver Versatz danach.",
+        "data": {
+          "trigger_time": "Uhrzeit",
+          "trigger_offset_minutes": "Versatz zum Sonnenereignis in Minuten"
+        }
+      },
+      "global_positions": {
+        "title": "Globale Positionsvorgaben",
+        "description": "Lege die Standardwerte für neue Räume fest. Jeder Raum speichert anschließend eigene Positionswerte und kann unabhängig angepasst werden. 0 % bedeutet vollständig geschlossen, 100 % vollständig geöffnet.",
+        "data": {
+          "open_position": "Offenposition",
+          "time_rule_close_position": "Schließposition für Zeitregeln / Nachtschließung",
+          "preventive_position": "Position für vorbeugende Verschattung",
+          "heat_position": "Hitzeschutzposition",
+          "strong_heat_position": "Position für starken Hitzeschutz",
+          "wind_safe_position": "Sicherheitsposition bei Wind",
+          "storm_safe_position": "Sicherheitsposition bei Sturm",
+          "rain_safe_position": "Sicherheitsposition bei Regen",
+          "frost_safe_position": "Sicherheitsposition bei Frost",
+          "tilt_default_position": "Standard-Lamellenposition",
+          "tilt_heat_position": "Lamellenposition bei Hitzeschutz",
+          "tilt_strong_heat_position": "Lamellenposition bei starkem Hitzeschutz",
+          "tilt_safety_position": "Lamellenposition bei Sicherheitsfahrt"
+        }
+      },
+      "positions": {
+        "title": "Positionen dieses Raums",
+        "description": "Diese Werte werden dauerhaft in diesem Raum gespeichert. Beim nächsten Speichern der globalen Positionswerte werden sämtliche Positionswerte dieses Raums ersetzt. Danach können sie hier wieder individuell geändert werden. 0 % bedeutet vollständig geschlossen, 100 % vollständig geöffnet.",
+        "data": {
+          "open_position": "Offenposition",
+          "time_rule_close_position": "Schließposition für Zeitregeln / Nachtschließung",
+          "preventive_position": "Position für vorbeugende Verschattung",
+          "heat_position": "Hitzeschutzposition",
+          "strong_heat_position": "Position für starken Hitzeschutz",
+          "wind_safe_position": "Sicherheitsposition bei Wind",
+          "storm_safe_position": "Sicherheitsposition bei Sturm",
+          "rain_safe_position": "Sicherheitsposition bei Regen",
+          "frost_safe_position": "Sicherheitsposition bei Frost",
+          "tilt_default_position": "Standard-Lamellenposition",
+          "tilt_heat_position": "Lamellenposition bei Hitzeschutz",
+          "tilt_strong_heat_position": "Lamellenposition bei starkem Hitzeschutz",
+          "tilt_safety_position": "Lamellenposition bei Sicherheitsfahrt"
+        },
+        "data_description": {
+          "time_rule_close_position": "Diese Position wird von jeder Zeitregel mit der Aktion „Runterfahren“ verwendet, insbesondere für die Nachtschließung.",
+          "wind_safe_position": "Wirkt nur bei aktiviertem Windschutz.",
+          "storm_safe_position": "Wirkt nur bei aktiviertem Wind- und Sturmschutz.",
+          "rain_safe_position": "Wirkt nur bei aktiviertem Regenschutz.",
+          "frost_safe_position": "Wirkt nur bei aktiviertem Frostschutz und der Frostaktion „Sicherheitsposition“."
+        }
+      },
+      "global_manual_override": {
+        "title": "Globale Sperrzeit für manuelle Bedienungen",
+        "description": "Lege die Standarddauer für manuelle Übersteuerungen fest. Neue Räume übernehmen diesen Wert als Vorlage.",
+        "data": {
+          "global_manual_override_minutes": "Globale Sperrzeit (spätestens bis Tageswechsel)"
+        }
+      }
+    },
+    "error": {
+      "no_covers": "Mindestens ein Rollladen muss ausgewählt werden.",
+      "duplicate_cover": "Ein Rollladen wurde mehreren Gebäudeseiten zugeordnet.",
+      "temperature_order": "Die Reihenfolge muss Komforttemperatur < Hitzeschutz < starker Hitzeschutz sein.",
+      "position_order": "Die Reihenfolge muss Offen ≥ Vorbeugung ≥ Hitzeschutz ≥ starker Hitzeschutz sein.",
+      "rule_name_required": "Gib einen Namen für die Zeitregel ein.",
+      "rule_day_type_invalid": "Die Auswahl für Arbeitstag oder freien Tag ist ungültig.",
+      "workday_sensor_required": "Für diese Auswahl muss zuerst in den zentralen Einstellungen ein Workday-Sensor ausgewählt werden.",
+      "rule_weekday_required": "Wähle mindestens einen Wochentag aus.",
+      "rule_cover_required": "Wähle mindestens einen Rollladen dieses Raums aus.",
+      "rule_reference_invalid": "Die Auswahl für den Auslöser ist ungültig.",
+      "rule_time_invalid": "Die Uhrzeit oder der Minutenversatz ist ungültig.",
+      "rule_cover_outside_room": "Ein ausgewählter Rollladen gehört nicht zu diesem Raum.",
+      "cover_in_other_room": "Mindestens ein Rollladen wird bereits von einem anderen Smart-Shading-Control-Raum gesteuert.",
+      "storm_below_wind": "Die Sturmgrenze muss mindestens so hoch wie die Windgrenze sein.",
+      "rule_action_invalid": "Die ausgewählte Fahraktion ist ungültig.",
+      "rule_no_weekdays": "Wähle mindestens einen Wochentag aus.",
+      "rule_conflict_opposite_action": "Für dieselben Rollläden existiert zur gleichen Zeit bereits eine gegensätzliche Fahraktion.",
+      "rule_conflict_duplicate": "Eine inhaltlich identische Zeitregel existiert bereits.",
+      "integration_cover_not_allowed": "Von Smart Shading Control erzeugte Raum- oder Einzelsteuerungen können nicht als physische Rollläden ausgewählt werden.",
+      "global_position_order_conflict": "Die ausgewählten globalen Übertragungen würden in mindestens einem Raum die Reihenfolge Offen ≥ Vorbeugung ≥ Hitzeschutz ≥ starker Hitzeschutz verletzen. Übertrage zusätzlich die dazugehörigen Werte oder passe die Vorlage an."
+    }
+  },
+  "options": {
+    "step": {
+      "global_menu": {
+        "title": "Zentrale Einstellungen",
+        "description": "Wähle zentrale Sensoren und Gebäudeparameter oder verwalte Werte für alle Räume. Beim Speichern werden die entsprechenden Raumwerte überschrieben; danach können einzelne Räume wieder individuell angepasst werden.",
+        "menu_options": {
+          "global_settings": "Sensoren und Gebäudeausrichtung",
+          "global_positions": "Positionswerte für alle Räume",
+          "global_manual_override": "Sperrzeit für alle Räume",
+          "add_global_time_rule": "Neue Zeitregel für alle Räume erstellen"
+        }
+      },
+      "room_menu": {
+        "title": "Raumeinstellungen",
+        "description": "Alle Einstellungen in diesem Bereich gelten nur für den ausgewählten Raum.",
+        "menu_options": {
+          "room": "Raum und Temperatursensor",
+          "covers": "Rollläden und Fenster-/Türkontakte",
+          "behavior": "Temperaturen und Fahrverhalten",
+          "positions": "Positionen dieses Raums",
+          "room_time_rules": "Zeitregeln dieses Raums"
+        }
+      },
+      "global_settings": {
+        "title": "Zentrale Einstellungen",
+        "description": "Diese Einstellungen gelten für alle Räume. Ost, Süd und West werden automatisch aus dem Azimut der Nordfassade berechnet.",
+        "data": {
+          "sun_entity": "Sonnen-Entität",
+          "weather_entity": "Wetter-Entität",
+          "workday_entity": "Workday-Sensor (optional)",
+          "outside_temperature_sensor": "Außentemperatursensor (optional)",
+          "irradiance_sensor": "Globalstrahlungssensor in W/m² (optional)",
+          "illuminance_sensor": "Helligkeitssensor in lx (optional)",
+          "azimuth_north": "Geografischer Azimut der Nordfassade",
+          "min_sun_elevation": "Minimale Sonnenhöhe",
+          "sun_half_angle": "Seitlicher Einfallswinkel je Fassade",
+          "frost_threshold": "Frostgrenze der Automatik",
+          "forecast_hours": "Prognosezeitraum",
+          "evaluation_interval": "Prüfintervall",
+          "wind_sensor": "Windsensor (optional)",
+          "rain_sensor": "Regensensor (optional)",
+          "wind_protection_enabled": "Wind- und Sturmschutz aktivieren",
+          "rain_protection_enabled": "Regenschutz aktivieren",
+          "frost_protection_enabled": "Frostschutz aktivieren",
+          "wind_threshold": "Windgrenze",
+          "storm_threshold": "Sturmgrenze",
+          "frost_action": "Verhalten bei Frost",
+          "protection_activation_delay": "Verzögerung bis Schutzaktivierung",
+          "protection_release_delay": "Nachlaufzeit bis Schutzfreigabe",
+          "sun_event_source": "Quelle für Sonnenaufgang/-untergang",
+          "dst_nonexistent_policy": "Nicht vorhandene Uhrzeit bei Zeitumstellung",
+          "dst_ambiguous_policy": "Doppelte Uhrzeit bei Zeitumstellung"
+        },
+        "data_description": {
+          "workday_entity": "Optionaler Binärsensor der Home-Assistant-Integration Workday. Er ermöglicht unterschiedliche Regeln für Arbeitstage und freie Tage beziehungsweise Feiertage.",
+          "azimuth_north": "0° entspricht geografisch Nord. Ost, Süd und West werden automatisch mit +90°, +180° und +270° berechnet."
+        }
+      },
+      "room": {
+        "title": "Neuen Raum anlegen",
+        "description": "Lege den Raum und seinen Temperatursensor fest.",
+        "data": {
+          "room_name": "Raumname",
+          "room_temperature_sensor": "Raumtemperatursensor"
+        }
+      },
+      "covers": {
+        "title": "Rollläden des Raums",
+        "description": "Ordne jeden Rollladen genau einer Gebäudeseite zu.",
+        "data": {
+          "covers_north": "Rollläden Nordseite",
+          "covers_east": "Rollläden Ostseite",
+          "covers_south": "Rollläden Südseite",
+          "covers_west": "Rollläden Westseite"
+        }
+      },
+      "cover_contact": {
+        "title": "Kontakt für „{cover}“",
+        "description": "Rollladen {number} von {total}. Der Fenster-/Türkontakt ist optional und wirkt nur auf diesen Rollladen.",
+        "data": {
+          "opening_contact": "Fenster-/Türkontakt (optional)"
+        }
+      },
+      "behavior": {
+        "title": "Temperaturen und Fahrverhalten",
+        "description": "Lege Temperaturgrenzen, Mindestbewegung, manuelle Übersteuerung und Lamellenaktivierung fest. Die Zielpositionen befinden sich im separaten Menü „Positionen dieses Raums“.",
+        "data": {
+          "comfort_temperature": "Komforttemperatur",
+          "heat_temperature": "Temperatur für Hitzeschutz",
+          "strong_heat_temperature": "Temperatur für starken Hitzeschutz",
+          "forecast_threshold": "Schwelle der Außentemperaturprognose",
+          "window_safe_position": "Sicherheitsposition bei geöffnetem Kontakt",
+          "tilted_min_position": "Mindestöffnung bei gekipptem Kontakt",
+          "min_position_change": "Mindeständerung der Position",
+          "min_move_interval": "Mindestabstand zwischen automatischen Fahrten",
+          "manual_override_minutes": "Dauer der manuellen Übersteuerung (spätestens bis Tageswechsel)",
+          "risk_hysteresis": "Hysterese des Hitzerisikos",
+          "failsafe_profile": "Fail-safe-Profil bei unbekanntem Kontakt",
+          "failsafe_position": "Fail-safe-Sicherheitsposition",
+          "dry_run": "Testmodus ohne Fahrbefehle",
+          "persist_manual_overrides": "Manuelle Übersteuerungen über Neustarts speichern",
+          "tilt_control_enabled": "Lamellensteuerung aktivieren"
+        },
+        "data_description": {
+          "manual_override_minutes": "Der Raumwert kann individuell angepasst werden. Beim nächsten Speichern der globalen Sperrzeit wird er jedoch wieder durch den globalen Wert ersetzt."
+        }
+      },
+      "room_time_rules": {
+        "title": "Zeitregeln dieses Raums",
+        "description": "Diese Fahrregeln werden ausschließlich aus diesem Raum ausgeführt. Global neu erstellte Regeln werden hier als zusätzliche Raumregeln angehängt und können anschließend individuell bearbeitet oder gelöscht werden.",
+        "menu_options": {
+          "add_room_time_rule": "Zeitregel für diesen Raum hinzufügen",
+          "edit_room_time_rule": "Zeitregel dieses Raums bearbeiten",
+          "delete_room_time_rule": "Zeitregel dieses Raums löschen",
+          "back_room_menu": "Zurück zu den Raumeinstellungen"
+        }
+      },
+      "edit_room_time_rule": {
+        "title": "Zeitregel dieses Raums bearbeiten",
+        "description": "Wähle eine Zeitregel dieses Raums aus.",
+        "data": {
+          "selected_rule": "Zeitregel dieses Raums"
+        }
+      },
+      "delete_room_time_rule": {
+        "title": "Zeitregel dieses Raums löschen",
+        "description": "Wähle die Zeitregel aus, die gelöscht werden soll.",
+        "data": {
+          "selected_rule": "Zeitregel dieses Raums"
+        }
+      },
+      "confirm_delete_room_rule": {
+        "title": "Zeitregel dieses Raums löschen",
+        "description": "Bestätige das endgültige Löschen der ausgewählten Zeitregel.",
+        "data": {
+          "confirm_delete": "Löschen bestätigen"
+        }
+      },
+      "global_rule_basics": {
+        "title": "Zeitregel – Grundlagen",
+        "description": "Beim Abschließen wird diese neue Fahrregel als eigene Raumregel an jeden vorhandenen Raum angehängt. Sie wird nicht global gespeichert und kann anschließend nur im jeweiligen Raum bearbeitet oder gelöscht werden.",
+        "data": {
+          "name": "Name der Zeitregel",
+          "action": "Fahraktion",
+          "day_type": "Gültigkeit nach Arbeitstag",
+          "priority": "Priorität",
+          "monday": "Montag",
+          "tuesday": "Dienstag",
+          "wednesday": "Mittwoch",
+          "thursday": "Donnerstag",
+          "friday": "Freitag",
+          "saturday": "Samstag",
+          "sunday": "Sonntag"
+        },
+        "data_description": {
+          "day_type": "Unabhängig vom Workday-Sensor, nur an Arbeitstagen oder nur an freien Tagen beziehungsweise Feiertagen.",
+          "priority": "Wenn mehrere im Raum gespeicherte Regeln denselben Rollladen im selben Moment betreffen, gewinnt die höhere Priorität. Bei gleicher Priorität entscheidet die Reihenfolge der gespeicherten Regeln.",
+          "action": "Runterfahren startet den zeitgesteuerten Schließzustand und fährt auf die wirksame Schließposition für Zeitregeln. Hochfahren beendet ihn, fährt auf die Offenposition und gibt danach die Beschattungsautomatik frei."
+        }
+      },
+      "room_rule_basics": {
+        "title": "Zeitregel – Grundlagen",
+        "description": "Diese Fahrregel gilt ausschließlich für diesen Raum. Runterfahren hält die ausgewählten Rollläden auf der wirksamen Schließposition für Zeitregeln, bis ein passendes Hochfahrereignis den Zustand beendet.",
+        "data": {
+          "name": "Name der Zeitregel",
+          "action": "Fahraktion",
+          "day_type": "Gültigkeit nach Arbeitstag",
+          "priority": "Priorität",
+          "monday": "Montag",
+          "tuesday": "Dienstag",
+          "wednesday": "Mittwoch",
+          "thursday": "Donnerstag",
+          "friday": "Freitag",
+          "saturday": "Samstag",
+          "sunday": "Sonntag",
+          "covers": "Betroffene Rollläden dieses Raums"
+        },
+        "data_description": {
+          "day_type": "Unabhängig vom Workday-Sensor, nur an Arbeitstagen oder nur an freien Tagen beziehungsweise Feiertagen.",
+          "priority": "Wenn mehrere im Raum gespeicherte Regeln denselben Rollladen im selben Moment betreffen, gewinnt die höhere Priorität. Bei gleicher Priorität entscheidet die Reihenfolge der gespeicherten Regeln.",
+          "action": "Runterfahren startet den zeitgesteuerten Schließzustand und fährt auf die wirksame Schließposition für Zeitregeln. Hochfahren beendet ihn, fährt auf die Offenposition und gibt danach die Beschattungsautomatik frei.",
+          "covers": "Wähle die Rollläden dieses Raums, für die diese lokal gespeicherte Regel gelten soll."
+        }
+      },
+      "global_rule_trigger": {
+        "title": "Zeitregel – Auslöser",
+        "description": "Wähle eine feste Uhrzeit, Sonnenaufgang oder Sonnenuntergang.",
+        "data": {
+          "trigger_reference": "Art des Auslösers"
+        }
+      },
+      "global_rule_trigger_value": {
+        "title": "Zeitregel – Zeitpunkt",
+        "description": "Bei einem Sonnenereignis bedeutet ein negativer Versatz davor und ein positiver Versatz danach.",
+        "data": {
+          "trigger_time": "Uhrzeit",
+          "trigger_offset_minutes": "Versatz zum Sonnenereignis in Minuten"
+        }
+      },
+      "room_rule_trigger": {
+        "title": "Zeitregel – Auslöser",
+        "description": "Wähle eine feste Uhrzeit, Sonnenaufgang oder Sonnenuntergang.",
+        "data": {
+          "trigger_reference": "Art des Auslösers"
+        }
+      },
+      "room_rule_trigger_value": {
+        "title": "Zeitregel – Zeitpunkt",
+        "description": "Bei einem Sonnenereignis bedeutet ein negativer Versatz davor und ein positiver Versatz danach.",
+        "data": {
+          "trigger_time": "Uhrzeit",
+          "trigger_offset_minutes": "Versatz zum Sonnenereignis in Minuten"
+        }
+      },
+      "global_positions": {
+        "title": "Globale Positionswerte für alle Räume",
+        "description": "Beim Speichern werden sämtliche Positionswerte in alle vorhandenen Räume geschrieben und ersetzen dort die bisherigen Raumwerte. Danach kann jeder Raum wieder individuell angepasst werden. Ein späteres erneutes Speichern überschreibt die Positionswerte in allen Räumen erneut.",
+        "data": {
+          "transfer_all_positions": "Alle Positionswerte in alle Räume übertragen",
+          "open_position": "Offenposition",
+          "transfer_open_position": "Offenposition in alle Räume übertragen",
+          "time_rule_close_position": "Schließposition für Zeitregeln / Nachtschließung",
+          "transfer_time_rule_close_position": "Schließposition für Zeitregeln / Nachtschließung in alle Räume übertragen",
+          "preventive_position": "Position für vorbeugende Verschattung",
+          "transfer_preventive_position": "Position für vorbeugende Verschattung in alle Räume übertragen",
+          "heat_position": "Hitzeschutzposition",
+          "transfer_heat_position": "Hitzeschutzposition in alle Räume übertragen",
+          "strong_heat_position": "Position für starken Hitzeschutz",
+          "transfer_strong_heat_position": "Position für starken Hitzeschutz in alle Räume übertragen",
+          "wind_safe_position": "Sicherheitsposition bei Wind",
+          "transfer_wind_safe_position": "Sicherheitsposition bei Wind in alle Räume übertragen",
+          "storm_safe_position": "Sicherheitsposition bei Sturm",
+          "transfer_storm_safe_position": "Sicherheitsposition bei Sturm in alle Räume übertragen",
+          "rain_safe_position": "Sicherheitsposition bei Regen",
+          "transfer_rain_safe_position": "Sicherheitsposition bei Regen in alle Räume übertragen",
+          "frost_safe_position": "Sicherheitsposition bei Frost",
+          "transfer_frost_safe_position": "Sicherheitsposition bei Frost in alle Räume übertragen",
+          "tilt_default_position": "Standard-Lamellenposition",
+          "transfer_tilt_default_position": "Standard-Lamellenposition in alle Räume übertragen",
+          "tilt_heat_position": "Lamellenposition bei Hitzeschutz",
+          "transfer_tilt_heat_position": "Lamellenposition bei Hitzeschutz in alle Räume übertragen",
+          "tilt_strong_heat_position": "Lamellenposition bei starkem Hitzeschutz",
+          "transfer_tilt_strong_heat_position": "Lamellenposition bei starkem Hitzeschutz in alle Räume übertragen",
+          "tilt_safety_position": "Lamellenposition bei Sicherheitsfahrt",
+          "transfer_tilt_safety_position": "Lamellenposition bei Sicherheitsfahrt in alle Räume übertragen"
+        },
+        "data_description": {
+          "transfer_all_positions": "Aktiviert: Beim Speichern werden sämtliche festgelegten Positionswerte in jeden vorhandenen Raum kopiert.",
+          "transfer_open_position": "Aktiviert: Dieser einzelne Wert wird beim Speichern in jeden vorhandenen Raum kopiert. Danach kann er dort wieder geändert werden.",
+          "transfer_time_rule_close_position": "Aktiviert: Dieser einzelne Wert wird beim Speichern in jeden vorhandenen Raum kopiert. Danach kann er dort wieder geändert werden.",
+          "transfer_preventive_position": "Aktiviert: Dieser einzelne Wert wird beim Speichern in jeden vorhandenen Raum kopiert. Danach kann er dort wieder geändert werden.",
+          "transfer_heat_position": "Aktiviert: Dieser einzelne Wert wird beim Speichern in jeden vorhandenen Raum kopiert. Danach kann er dort wieder geändert werden.",
+          "transfer_strong_heat_position": "Aktiviert: Dieser einzelne Wert wird beim Speichern in jeden vorhandenen Raum kopiert. Danach kann er dort wieder geändert werden.",
+          "transfer_wind_safe_position": "Aktiviert: Dieser einzelne Wert wird beim Speichern in jeden vorhandenen Raum kopiert. Danach kann er dort wieder geändert werden.",
+          "transfer_storm_safe_position": "Aktiviert: Dieser einzelne Wert wird beim Speichern in jeden vorhandenen Raum kopiert. Danach kann er dort wieder geändert werden.",
+          "transfer_rain_safe_position": "Aktiviert: Dieser einzelne Wert wird beim Speichern in jeden vorhandenen Raum kopiert. Danach kann er dort wieder geändert werden.",
+          "transfer_frost_safe_position": "Aktiviert: Dieser einzelne Wert wird beim Speichern in jeden vorhandenen Raum kopiert. Danach kann er dort wieder geändert werden.",
+          "transfer_tilt_default_position": "Aktiviert: Dieser einzelne Wert wird beim Speichern in jeden vorhandenen Raum kopiert. Danach kann er dort wieder geändert werden.",
+          "transfer_tilt_heat_position": "Aktiviert: Dieser einzelne Wert wird beim Speichern in jeden vorhandenen Raum kopiert. Danach kann er dort wieder geändert werden.",
+          "transfer_tilt_strong_heat_position": "Aktiviert: Dieser einzelne Wert wird beim Speichern in jeden vorhandenen Raum kopiert. Danach kann er dort wieder geändert werden.",
+          "transfer_tilt_safety_position": "Aktiviert: Dieser einzelne Wert wird beim Speichern in jeden vorhandenen Raum kopiert. Danach kann er dort wieder geändert werden."
+        }
+      },
+      "positions": {
+        "title": "Positionen dieses Raums",
+        "description": "Diese Werte werden dauerhaft in diesem Raum gespeichert. Beim nächsten Speichern der globalen Positionswerte werden sämtliche Positionswerte dieses Raums ersetzt. Danach können sie hier wieder individuell geändert werden. 0 % bedeutet vollständig geschlossen, 100 % vollständig geöffnet.",
+        "data": {
+          "open_position": "Offenposition",
+          "time_rule_close_position": "Schließposition für Zeitregeln / Nachtschließung",
+          "preventive_position": "Position für vorbeugende Verschattung",
+          "heat_position": "Hitzeschutzposition",
+          "strong_heat_position": "Position für starken Hitzeschutz",
+          "wind_safe_position": "Sicherheitsposition bei Wind",
+          "storm_safe_position": "Sicherheitsposition bei Sturm",
+          "rain_safe_position": "Sicherheitsposition bei Regen",
+          "frost_safe_position": "Sicherheitsposition bei Frost",
+          "tilt_default_position": "Standard-Lamellenposition",
+          "tilt_heat_position": "Lamellenposition bei Hitzeschutz",
+          "tilt_strong_heat_position": "Lamellenposition bei starkem Hitzeschutz",
+          "tilt_safety_position": "Lamellenposition bei Sicherheitsfahrt"
+        },
+        "data_description": {
+          "time_rule_close_position": "Diese Position wird von jeder Zeitregel mit der Aktion „Runterfahren“ verwendet, insbesondere für die Nachtschließung.",
+          "wind_safe_position": "Wirkt nur bei aktiviertem Windschutz.",
+          "storm_safe_position": "Wirkt nur bei aktiviertem Wind- und Sturmschutz.",
+          "rain_safe_position": "Wirkt nur bei aktiviertem Regenschutz.",
+          "frost_safe_position": "Wirkt nur bei aktiviertem Frostschutz und der Frostaktion „Sicherheitsposition“."
+        }
+      },
+      "global_manual_override": {
+        "title": "Globale Sperrzeit für alle Räume",
+        "description": "Beim Speichern wird dieser Wert in alle vorhandenen Räume geschrieben und ersetzt dort die bisherige Sperrzeit. Danach kann jeder Raum wieder einzeln angepasst werden. Ein späteres erneutes Speichern überschreibt die Raumwerte erneut.",
+        "data": {
+          "global_manual_override_minutes": "Sperrzeit für manuelle Bedienungen (spätestens bis Tageswechsel)"
+        }
+      }
+    },
+    "error": {
+      "no_covers": "Mindestens ein Rollladen muss ausgewählt werden.",
+      "duplicate_cover": "Ein Rollladen wurde mehreren Gebäudeseiten zugeordnet.",
+      "temperature_order": "Die Reihenfolge muss Komforttemperatur < Hitzeschutz < starker Hitzeschutz sein.",
+      "position_order": "Die Reihenfolge muss Offen ≥ Vorbeugung ≥ Hitzeschutz ≥ starker Hitzeschutz sein.",
+      "rule_name_required": "Gib einen Namen für die Zeitregel ein.",
+      "rule_day_type_invalid": "Die Auswahl für Arbeitstag oder freien Tag ist ungültig.",
+      "workday_sensor_required": "Für diese Auswahl muss zuerst in den zentralen Einstellungen ein Workday-Sensor ausgewählt werden.",
+      "rule_weekday_required": "Wähle mindestens einen Wochentag aus.",
+      "rule_cover_required": "Wähle mindestens einen Rollladen dieses Raums aus.",
+      "rule_reference_invalid": "Die Auswahl für den Auslöser ist ungültig.",
+      "rule_time_invalid": "Die Uhrzeit oder der Minutenversatz ist ungültig.",
+      "rule_cover_outside_room": "Ein ausgewählter Rollladen gehört nicht zu diesem Raum.",
+      "cover_in_other_room": "Mindestens ein Rollladen wird bereits von einem anderen Smart-Shading-Control-Raum gesteuert.",
+      "storm_below_wind": "Die Sturmgrenze muss mindestens so hoch wie die Windgrenze sein.",
+      "rule_action_invalid": "Die ausgewählte Fahraktion ist ungültig.",
+      "rule_no_weekdays": "Wähle mindestens einen Wochentag aus.",
+      "rule_conflict_opposite_action": "Für dieselben Rollläden existiert zur gleichen Zeit bereits eine gegensätzliche Fahraktion.",
+      "rule_conflict_duplicate": "Eine inhaltlich identische Zeitregel existiert bereits.",
+      "integration_cover_not_allowed": "Von Smart Shading Control erzeugte Raum- oder Einzelsteuerungen können nicht als physische Rollläden ausgewählt werden.",
+      "global_position_order_conflict": "Die ausgewählten globalen Übertragungen würden in mindestens einem Raum die Reihenfolge Offen ≥ Vorbeugung ≥ Hitzeschutz ≥ starker Hitzeschutz verletzen. Übertrage zusätzlich die dazugehörigen Werte oder passe die Vorlage an."
+    }
+  },
+  "selector": {
+    "time_reference": {
+      "options": {
+        "fixed_time": "Feste Uhrzeit",
+        "sunrise": "Sonnenaufgang",
+        "sunset": "Sonnenuntergang"
+      }
+    },
+    "day_type": {
+      "options": {
+        "any_day": "Unabhängig von Arbeitstag/Feiertag",
+        "workday": "Nur Arbeitstage",
+        "non_workday": "Nur freie Tage und Feiertage"
+      }
+    },
+    "failsafe_profile": {
+      "options": {
+        "block": "Nur blockieren",
+        "stop": "Stoppen und blockieren",
+        "open": "Stoppen und vollständig öffnen",
+        "safe_position": "Stoppen und Sicherheitsposition anfahren"
+      }
+    },
+    "frost_action": {
+      "options": {
+        "block": "Automatische Bewegung blockieren",
+        "safe_position": "Sicherheitsposition anfahren"
+      }
+    },
+    "sun_event_source": {
+      "options": {
+        "location": "Home-Assistant-Standort",
+        "configured_entity": "Konfigurierte Sonnen-Entität"
+      }
+    },
+    "dst_nonexistent_policy": {
+      "options": {
+        "shift_forward": "Auf die erste gültige Uhrzeit verschieben",
+        "skip": "Regelgrenze überspringen"
+      }
+    },
+    "dst_ambiguous_policy": {
+      "options": {
+        "first": "Erstes Auftreten verwenden",
+        "second": "Zweites Auftreten verwenden"
+      }
+    },
+    "time_rule_action": {
+      "options": {
+        "open": "Hochfahren",
+        "close": "Runterfahren"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "status": {
+        "name": "Steuerungsstatus",
+        "state": {
+          "disabled": "Deaktiviert",
+          "paused": "Pausiert",
+          "contact_protection": "Kontaktschutz",
+          "tilted_limit": "Kippschutz",
+          "contact_unknown": "Kontaktzustand unbekannt",
+          "frost_block": "Frostsperre",
+          "manual_override": "Manuell übersteuert",
+          "schedule": "Zeitregel",
+          "strong_heat": "Starker Hitzeschutz",
+          "heat_protection": "Hitzeschutz",
+          "preventive": "Vorbeugende Verschattung",
+          "solar_gain": "Solargewinn",
+          "normal": "Normal",
+          "unavailable": "Nicht verfügbar",
+          "failsafe": "Fail-safe aktiv",
+          "frost_protection": "Frostschutz",
+          "rain_protection": "Regenschutz",
+          "wind_protection": "Windschutz",
+          "storm_protection": "Sturmschutz",
+          "dry_run": "Testmodus"
+        }
+      },
+      "heat_risk": {
+        "name": "Hitzerisiko"
+      },
+      "sun_load": {
+        "name": "Sonnenlast"
+      },
+      "reason_code": {
+        "name": "Entscheidungsgrund",
+        "state": {
+          "initializing": "Initialisierung",
+          "no_covers": "Keine Rollläden konfiguriert",
+          "control_disabled": "Steuerung deaktiviert",
+          "mode_pause": "Betriebsmodus Pause",
+          "mode_open": "Betriebsmodus Offen",
+          "mode_closed": "Betriebsmodus Geschlossen",
+          "mode_heat_protection": "Betriebsmodus Hitzeschutz",
+          "contact_closing_protection": "Schließschutz durch Kontakt aktiv",
+          "contact_tilted_safety": "Kippschutz aktiv",
+          "contact_unknown_block": "Unbekannter Kontakt – Bewegung blockiert",
+          "contact_unknown_stop": "Unbekannter Kontakt – Bewegung gestoppt",
+          "contact_unknown_open": "Unbekannter Kontakt – vollständig geöffnet",
+          "contact_unknown_safe_position": "Unbekannter Kontakt – Sicherheitsposition",
+          "all_manual_override": "Alle betroffenen Rollläden manuell übersteuert",
+          "storm_protection": "Sturmschutz aktiv",
+          "wind_protection": "Windschutz aktiv",
+          "rain_protection": "Regenschutz aktiv",
+          "frost_protection": "Frostschutz aktiv",
+          "dry_run": "Testmodus – keine Fahrbefehle",
+          "dynamic_strong_heat": "Dynamik: starker Hitzeschutz",
+          "dynamic_heat_protection": "Dynamik: Hitzeschutz",
+          "dynamic_preventive": "Dynamik: vorbeugende Verschattung",
+          "dynamic_solar_gain": "Dynamik: Solargewinn",
+          "dynamic_normal": "Dynamik: keine Verschattung erforderlich",
+          "time_rule_event": "Zeitregel ausgelöst",
+          "time_rule_open_retry": "Zeitregel-Öffnung wird erneut versucht",
+          "time_rule_closed": "Zeitgesteuert geschlossen",
+          "time_rule_close_blocked_contact": "Nachtabsenkung durch geöffneten Kontakt blockiert",
+          "time_rule_close_contact_delay": "Nachtabsenkung wartet nach Kontaktschließung"
+        }
+      },
+      "decision_diagnostics": {
+        "name": "Entscheidungsdiagnose",
+        "state": {
+          "initializing": "Initialisierung",
+          "no_covers": "Keine Rollläden konfiguriert",
+          "control_disabled": "Steuerung deaktiviert",
+          "mode_pause": "Betriebsmodus Pause",
+          "mode_open": "Betriebsmodus Offen",
+          "mode_closed": "Betriebsmodus Geschlossen",
+          "mode_heat_protection": "Betriebsmodus Hitzeschutz",
+          "contact_closing_protection": "Schließschutz durch Kontakt aktiv",
+          "contact_tilted_safety": "Kippschutz aktiv",
+          "contact_unknown_block": "Unbekannter Kontakt – Bewegung blockiert",
+          "contact_unknown_stop": "Unbekannter Kontakt – Bewegung gestoppt",
+          "contact_unknown_open": "Unbekannter Kontakt – vollständig geöffnet",
+          "contact_unknown_safe_position": "Unbekannter Kontakt – Sicherheitsposition",
+          "all_manual_override": "Alle betroffenen Rollläden manuell übersteuert",
+          "storm_protection": "Sturmschutz aktiv",
+          "wind_protection": "Windschutz aktiv",
+          "rain_protection": "Regenschutz aktiv",
+          "frost_protection": "Frostschutz aktiv",
+          "dry_run": "Testmodus – keine Fahrbefehle",
+          "dynamic_strong_heat": "Dynamik: starker Hitzeschutz",
+          "dynamic_heat_protection": "Dynamik: Hitzeschutz",
+          "dynamic_preventive": "Dynamik: vorbeugende Verschattung",
+          "dynamic_solar_gain": "Dynamik: Solargewinn",
+          "dynamic_normal": "Dynamik: keine Verschattung erforderlich",
+          "time_rule_event": "Zeitregel ausgelöst",
+          "time_rule_open_retry": "Zeitregel-Öffnung wird erneut versucht",
+          "time_rule_closed": "Zeitgesteuert geschlossen",
+          "time_rule_close_blocked_contact": "Nachtabsenkung durch geöffneten Kontakt blockiert",
+          "time_rule_close_contact_delay": "Nachtabsenkung wartet nach Kontaktschließung"
+        }
+      },
+      "forecast_age": {
+        "name": "Alter der Wetterprognose"
+      },
+      "pending_time_rule_open_count": {
+        "name": "Ausstehende Zeitregel-Öffnungen"
+      },
+      "provider_failures": {
+        "name": "Aufeinanderfolgende Anbieterfehler"
+      },
+      "command_queue_depth": {
+        "name": "Befehlswarteschlange"
+      },
+      "time_rule_conflict_count": {
+        "name": "Zeitregel-Konflikte"
+      },
+      "last_successful_command": {
+        "name": "Letzter erfolgreicher Fahrbefehl"
+      },
+      "last_provider_error": {
+        "name": "Letzter Providerfehler"
+      },
+      "next_provider_retry": {
+        "name": "Nächster Provider-Wiederholungsversuch"
+      },
+      "pending_time_rule_close_count": {
+        "name": "Ausstehende Nachtabsenkungen"
+      },
+      "next_time_rule_close_retry": {
+        "name": "Nächster Versuch der Nachtabsenkung"
+      },
+      "contact_state": {
+        "name": "Kontakt {window}",
+        "state": {
+          "closed": "Geschlossen",
+          "tilted": "Gekippt",
+          "open": "Geöffnet",
+          "unknown": "Unbekannt"
+        },
+        "state_attributes": {
+          "source_entity_id": {
+            "name": "Quellsensor"
+          },
+          "source_state": {
+            "name": "Originalzustand"
+          },
+          "assigned_covers": {
+            "name": "Zugeordnete Rollläden"
+          },
+          "assigned_cover_names": {
+            "name": "Namen der zugeordneten Rollläden"
+          }
+        }
+      },
+      "room_temperature": {
+        "name": "Temperatur",
+        "state_attributes": {
+          "source_entity_id": {
+            "name": "Quellsensor"
+          },
+          "source_state": {
+            "name": "Originalzustand"
+          },
+          "source_unit": {
+            "name": "Originaleinheit"
+          }
+        }
+      }
+    },
+    "binary_sensor": {
+      "direct_sun": {
+        "name": "Direkte Sonne"
+      },
+      "heat_protection_active": {
+        "name": "Hitzeschutz aktiv"
+      },
+      "provider_degraded": {
+        "name": "Rollladenanbieter gestört"
+      },
+      "forecast_stale": {
+        "name": "Wetterprognose veraltet"
+      },
+      "pending_time_rule_open": {
+        "name": "Zeitregel-Öffnung ausstehend"
+      },
+      "command_queue_busy": {
+        "name": "Befehlswarteschlange aktiv"
+      }
+    },
+    "switch": {
+      "control_enabled": {
+        "name": "Steuerung aktiv"
+      }
+    },
+    "select": {
+      "mode": {
+        "name": "Betriebsmodus",
+        "state": {
+          "automatic": "Automatik",
+          "heat_protection": "Hitzeschutz",
+          "open": "Offen",
+          "closed": "Geschlossen",
+          "pause": "Pause"
+        }
+      }
+    },
+    "button": {
+      "recalculate": {
+        "name": "Neu berechnen"
+      },
+      "clear_overrides": {
+        "name": "Manuelle Übersteuerungen löschen"
+      },
+      "clear_decision_log": {
+        "name": "Entscheidungsprotokoll löschen"
+      }
+    },
+    "cover": {
+      "room_covers": {
+        "name": "Rollladen – Alle"
+      },
+      "individual_cover": {
+        "name": "Rollladen {cover}"
+      }
+    }
+  },
+  "issues": {
+    "contact_unknown": {
+      "title": "Kontaktzustand unbekannt",
+      "description": "Der Kontakt {entity} im Raum {room} ist nicht verfügbar oder unbekannt. Die konfigurierte Fail-safe-Strategie ist aktiv."
+    },
+    "cover_stop_unsupported": {
+      "title": "Notstopp nicht unterstützt",
+      "description": "Der Rollladen {entity} im Raum {room} unterstützt keinen Stop-Befehl. Bei Kontaktverlust kann eine laufende Fahrt nicht aktiv gestoppt werden."
+    },
+    "cover_tilt_unsupported": {
+      "title": "Lamellensteuerung nicht unterstützt",
+      "description": "Der Rollladen {entity} im Raum {room} unterstützt keine Lamellensteuerung."
+    },
+    "provider_degraded": {
+      "title": "Rollladenanbieter gestört",
+      "description": "Mehrere Fahrbefehle im Raum {room} sind fehlgeschlagen. Die Integration verwendet eine adaptive Wiederholung."
+    },
+    "weather_forecast_unavailable": {
+      "title": "Wetterprognose nicht verfügbar",
+      "description": "Die gemeinsame Stundenprognose der Wetter-Entität {entity} konnte nicht geladen werden. Die prognosebasierte Auswertung steht vorübergehend in allen Räumen nicht zur Verfügung."
+    },
+    "invalid_irradiance_unit": {
+      "title": "Ungültige Einheit der Globalstrahlung",
+      "description": "Die Entität {entity} verwendet die nicht unterstützte Einheit {unit}. Unterstützt werden W/m² und kW/m²."
+    },
+    "invalid_illuminance_unit": {
+      "title": "Ungültige Einheit der Helligkeit",
+      "description": "Die Entität {entity} verwendet die nicht unterstützte Einheit {unit}. Unterstützt werden lx und klx."
+    },
+    "invalid_wind_unit": {
+      "title": "Ungültige Einheit der Windgeschwindigkeit",
+      "description": "Die Entität {entity} verwendet die nicht unterstützte Einheit {unit}. Unterstützt werden km/h, m/s, mph und kn."
+    },
+    "missing_entity": {
+      "title": "Konfigurierte Entität fehlt",
+      "description": "Die konfigurierte Entität {entity} im Raum {room} existiert nicht."
+    },
+    "cover_position_unsupported": {
+      "title": "Teilposition nicht unterstützt",
+      "description": "Der Rollladen {entity} im Raum {room} unterstützt keine Prozentpositionen. Teilziele werden sicher auf vollständig geöffnet oder geschlossen abgebildet."
+    },
+    "workday_unavailable": {
+      "title": "Workday-Sensor nicht verfügbar",
+      "description": "Der global konfigurierte Workday-Sensor {entity} ist nicht verfügbar. Arbeitstagsabhängige Regeln können nicht zuverlässig ausgewertet werden."
+    },
+    "sun_event_unavailable": {
+      "title": "Sonnenereignis nicht verfügbar",
+      "description": "Die global konfigurierte Sonnen-Entität {entity} liefert nicht alle von den Zeitregeln benötigten Sonnenereignisse. Es wird ersatzweise auf die Standortdaten von Home Assistant zurückgegriffen."
+    },
+    "duplicate_cover_assignment": {
+      "title": "Rollladen mehrfach zugeordnet",
+      "description": "Mindestens einer dieser Rollläden wird bereits in einem anderen Raum verwendet: {covers}. Betroffener Raum: {room}."
+    },
+    "invalid_temperature_unit": {
+      "title": "Nicht unterstützte Temperatureinheit",
+      "description": "Die Temperaturentität {entity} verwendet die nicht unterstützte Einheit „{unit}“. Wähle eine Entität mit einer von Home Assistant unterstützten Temperatureinheit oder korrigiere die Entitätskonfiguration."
+    },
+    "workday_configuration_missing": {
+      "title": "Workday-Konfiguration fehlt",
+      "description": "Mindestens eine globale oder raumbezogene Zeitregel benötigt die Arbeitstagserkennung, aber es ist kein globaler Workday-Sensor konfiguriert. Wähle einen Workday-Sensor oder stelle die betroffenen Regeln auf „Jeder Tag“ um."
+    },
+    "global_missing_entity": {
+      "title": "Global konfigurierte Entität fehlt",
+      "description": "Die global konfigurierte Entität {entity} existiert nicht."
+    }
+  }
+}
