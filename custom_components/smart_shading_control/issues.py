@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
 
@@ -47,17 +45,6 @@ def delete_issue(
 ) -> None:
     """Delete one Repairs issue after the condition recovered."""
     ir.async_delete_issue(hass, DOMAIN, _issue_id(entry_id, kind, entity_id))
-
-
-def delete_entity_issues(
-    hass: HomeAssistant,
-    entry_id: str,
-    kinds: Iterable[str],
-    entity_id: str,
-) -> None:
-    """Delete several issues for one entity."""
-    for kind in kinds:
-        delete_issue(hass, entry_id, kind, entity_id)
 
 
 def delete_entry_issues(hass: HomeAssistant, entry_id: str) -> None:

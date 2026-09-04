@@ -6,7 +6,6 @@ from typing import Any
 from uuid import uuid4
 
 import voluptuous as vol
-
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_FRIENDLY_NAME
 from homeassistant.core import HomeAssistant
@@ -21,32 +20,20 @@ from .const import (
     CONF_COVERS_NORTH,
     CONF_COVERS_SOUTH,
     CONF_COVERS_WEST,
+    CONF_DRY_RUN,
+    CONF_DST_AMBIGUOUS_POLICY,
+    CONF_DST_NONEXISTENT_POLICY,
     CONF_ENTRY_TYPE,
     CONF_EVALUATION_INTERVAL,
     CONF_FORECAST_HOURS,
     CONF_FORECAST_THRESHOLD,
-    CONF_FROST_THRESHOLD,
     CONF_FROST_ACTION,
-    CONF_FROST_SAFE_POSITION,
-    CONF_GLOBAL_TIME_RULES,
-    CONF_GLOBAL_POSITION_VALUES,
-    CONF_GLOBAL_MANUAL_OVERRIDE_MINUTES,
-    CONF_TRANSFER_ALL_POSITIONS,
-    CONF_WIND_SENSOR,
-    CONF_WIND_PROTECTION_ENABLED,
-    CONF_RAIN_PROTECTION_ENABLED,
     CONF_FROST_PROTECTION_ENABLED,
-    CONF_RAIN_SENSOR,
-    CONF_WIND_THRESHOLD,
-    CONF_STORM_THRESHOLD,
-    CONF_WIND_SAFE_POSITION,
-    CONF_STORM_SAFE_POSITION,
-    CONF_RAIN_SAFE_POSITION,
-    CONF_PROTECTION_ACTIVATION_DELAY,
-    CONF_PROTECTION_RELEASE_DELAY,
-    CONF_SUN_EVENT_SOURCE,
-    CONF_DST_NONEXISTENT_POLICY,
-    CONF_DST_AMBIGUOUS_POLICY,
+    CONF_FROST_SAFE_POSITION,
+    CONF_FROST_THRESHOLD,
+    CONF_GLOBAL_MANUAL_OVERRIDE_MINUTES,
+    CONF_GLOBAL_POSITION_VALUES,
+    CONF_GLOBAL_TIME_RULES,
     CONF_HEAT_POSITION,
     CONF_HEAT_TEMPERATURE,
     CONF_ILLUMINANCE_SENSOR,
@@ -54,19 +41,17 @@ from .const import (
     CONF_MANUAL_OVERRIDE_MINUTES,
     CONF_MIN_MOVE_INTERVAL,
     CONF_MIN_POSITION_CHANGE,
-    CONF_PERSIST_MANUAL_OVERRIDES,
     CONF_MIN_SUN_ELEVATION,
     CONF_OPEN_POSITION,
     CONF_OPENING_CONTACT,
     CONF_OUTSIDE_TEMP_SENSOR,
     CONF_PREVENTIVE_POSITION,
+    CONF_PROTECTION_ACTIVATION_DELAY,
+    CONF_PROTECTION_RELEASE_DELAY,
+    CONF_RAIN_PROTECTION_ENABLED,
+    CONF_RAIN_SAFE_POSITION,
+    CONF_RAIN_SENSOR,
     CONF_RISK_HYSTERESIS,
-    CONF_DRY_RUN,
-    CONF_TILT_CONTROL_ENABLED,
-    CONF_TILT_DEFAULT_POSITION,
-    CONF_TILT_HEAT_POSITION,
-    CONF_TILT_STRONG_HEAT_POSITION,
-    CONF_TILT_SAFETY_POSITION,
     CONF_ROOM_NAME,
     CONF_ROOM_TEMP_SENSOR,
     CONF_RULE_ACTION,
@@ -80,30 +65,41 @@ from .const import (
     CONF_RULE_PRIORITY,
     CONF_RULE_SATURDAY,
     CONF_RULE_SCOPE,
+    CONF_RULE_SUNDAY,
+    CONF_RULE_THURSDAY,
     CONF_RULE_TRIGGER,
     CONF_RULE_TRIGGER_OFFSET,
     CONF_RULE_TRIGGER_REFERENCE,
-    CONF_RULE_SUNDAY,
-    CONF_RULE_THURSDAY,
     CONF_RULE_TUESDAY,
     CONF_RULE_WEDNESDAY,
+    CONF_STORM_SAFE_POSITION,
+    CONF_STORM_THRESHOLD,
     CONF_STRONG_HEAT_POSITION,
-    CONF_TIME_RULE_CLOSE_POSITION,
     CONF_STRONG_HEAT_TEMPERATURE,
     CONF_SUN_ENTITY,
+    CONF_SUN_EVENT_SOURCE,
     CONF_SUN_HALF_ANGLE,
+    CONF_TILT_CONTROL_ENABLED,
+    CONF_TILT_DEFAULT_POSITION,
+    CONF_TILT_HEAT_POSITION,
+    CONF_TILT_SAFETY_POSITION,
+    CONF_TILT_STRONG_HEAT_POSITION,
+    CONF_TIME_RULE_CLOSE_POSITION,
     CONF_TIME_RULES,
     CONF_WEATHER_ENTITY,
+    CONF_WIND_PROTECTION_ENABLED,
+    CONF_WIND_SAFE_POSITION,
+    CONF_WIND_SENSOR,
+    CONF_WIND_THRESHOLD,
     CONF_WORKDAY_ENTITY,
     DAY_TYPE_ANY,
     DAY_TYPES,
     DOMAIN,
+    DST_AMBIGUOUS_POLICIES,
+    DST_NONEXISTENT_POLICIES,
     ENTRY_TYPE_GLOBAL,
     ENTRY_TYPE_ROOM,
     FROST_ACTIONS,
-    SUN_EVENT_SOURCES,
-    DST_NONEXISTENT_POLICIES,
-    DST_AMBIGUOUS_POLICIES,
     GLOBAL_DEFAULTS,
     POSITION_DEFAULTS,
     POSITION_SETTING_KEYS,
@@ -113,6 +109,7 @@ from .const import (
     RULE_ACTIONS,
     RULE_SCOPE_GLOBAL,
     RULE_SCOPE_ROOM,
+    SUN_EVENT_SOURCES,
     TIME_REFERENCE_FIXED,
     TIME_REFERENCES,
     WEEKDAY_KEYS,
@@ -399,15 +396,9 @@ def _behavior_schema(
             vol.Required(CONF_MANUAL_OVERRIDE_MINUTES, default=current[CONF_MANUAL_OVERRIDE_MINUTES]): _number(0, 1440, 5, "min"),
             vol.Required(CONF_RISK_HYSTERESIS, default=current[CONF_RISK_HYSTERESIS]): _number(0, 25, 1),
             vol.Required(CONF_DRY_RUN, default=current[CONF_DRY_RUN]): selector.BooleanSelector(),
-            vol.Required(CONF_PERSIST_MANUAL_OVERRIDES, default=current[CONF_PERSIST_MANUAL_OVERRIDES]): selector.BooleanSelector(),
             vol.Required(CONF_TILT_CONTROL_ENABLED, default=current[CONF_TILT_CONTROL_ENABLED]): selector.BooleanSelector(),
         }
     )
-
-def _transfer_field(key: str) -> str:
-    """Return the transient form field used to copy one value to all rooms."""
-    return f"transfer_{key}"
-
 
 def _normalized_position_values(raw: Any) -> dict[str, int]:
     """Return a complete, range-limited position dictionary."""
@@ -480,17 +471,6 @@ def _clean_global_manual_override_input(
     return {CONF_GLOBAL_MANUAL_OVERRIDE_MINUTES: max(0, min(1440, value))}
 
 
-def _selected_position_transfers(user_input: dict[str, Any]) -> set[str]:
-    """Return position keys selected for one-time transfer to every room."""
-    if normalize_boolean(user_input.get(CONF_TRANSFER_ALL_POSITIONS), False):
-        return set(POSITION_SETTING_KEYS)
-    return {
-        key
-        for key in POSITION_SETTING_KEYS
-        if normalize_boolean(user_input.get(_transfer_field(key)), False)
-    }
-
-
 def _position_order_is_valid(data: dict[str, Any]) -> bool:
     """Return whether the four dynamic vertical positions are ordered."""
     positions = [
@@ -500,27 +480,6 @@ def _position_order_is_valid(data: dict[str, Any]) -> bool:
         int(data[CONF_STRONG_HEAT_POSITION]),
     ]
     return positions[0] >= positions[1] >= positions[2] >= positions[3]
-
-
-def _room_positions_after_transfer(
-    room_values: dict[str, Any],
-    global_values: dict[str, int],
-    selected_keys: set[str],
-) -> dict[str, int]:
-    """Return room positions after a prospective one-time global transfer."""
-    result: dict[str, int] = {}
-    for key, default in POSITION_DEFAULTS.items():
-        raw = (
-            global_values.get(key, default)
-            if key in selected_keys
-            else room_values.get(key, global_values.get(key, default))
-        )
-        try:
-            value = int(raw)
-        except (TypeError, ValueError):
-            value = int(default)
-        result[key] = max(0, min(100, value))
-    return result
 
 
 def _validate_room_position_settings(
@@ -534,24 +493,9 @@ def _validate_room_position_settings(
 def _validate_global_position_settings(
     hass: HomeAssistant, data: dict[str, Any]
 ) -> str | None:
-    """Validate templates and every room affected by the selected transfer."""
-    if error := _validate_positions(data):
-        return error
-    global_values = _normalized_position_values(data)
-    selected_keys = _selected_position_transfers(data)
-    if not selected_keys:
-        return None
-    for entry in hass.config_entries.async_entries(DOMAIN):
-        if _entry_kind(entry) != ENTRY_TYPE_ROOM:
-            continue
-        room_values = dict(entry.data)
-        room_values.update(entry.options)
-        prospective = _room_positions_after_transfer(
-            room_values, global_values, selected_keys
-        )
-        if not _position_order_is_valid(prospective):
-            return "global_position_order_conflict"
-    return None
+    """Validate the complete template copied to every room on save."""
+    del hass
+    return _validate_positions(data)
 
 
 def _positions_schema(
@@ -584,10 +528,8 @@ def _positions_schema(
 
 def _global_positions_schema(
     values: dict[str, Any] | None = None,
-    *,
-    include_transfer_controls: bool = False,
 ) -> vol.Schema:
-    """Return central templates and optional one-time transfer controls."""
+    """Return the complete central position template."""
     current = dict(values or {})
     if any(key in current for key in POSITION_SETTING_KEYS):
         positions = _normalized_position_values(current)
@@ -596,26 +538,8 @@ def _global_positions_schema(
             current.get(CONF_GLOBAL_POSITION_VALUES)
         )
     fields: dict[vol.Marker, Any] = {}
-    if include_transfer_controls:
-        fields[
-            vol.Required(
-                CONF_TRANSFER_ALL_POSITIONS,
-                default=normalize_boolean(
-                    current.get(CONF_TRANSFER_ALL_POSITIONS), False
-                ),
-            )
-        ] = selector.BooleanSelector()
     for key in POSITION_SETTING_KEYS:
         fields[vol.Required(key, default=positions[key])] = _number(0, 100, 1, "%")
-        if include_transfer_controls:
-            fields[
-                vol.Required(
-                    _transfer_field(key),
-                    default=normalize_boolean(
-                        current.get(_transfer_field(key)), False
-                    ),
-                )
-            ] = selector.BooleanSelector()
     return vol.Schema(fields)
 
 
@@ -1027,5 +951,4 @@ def _action_summary(action: str, language: str = "en") -> str:
     if action == RULE_ACTION_OPEN:
         return "Hochfahren" if is_german else "Open"
     return "Runterfahren" if is_german else "Close"
-
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-import math
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -11,14 +10,11 @@ from homeassistant.const import (
     ATTR_UNIT_OF_MEASUREMENT,
     STATE_UNAVAILABLE,
     STATE_UNKNOWN,
-    UnitOfTemperature,
 )
 from homeassistant.core import HomeAssistant, State
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.util import dt as dt_util
-from homeassistant.util.unit_conversion import TemperatureConverter
 
 from .const import (
     CONF_COVER_CONTACTS,
@@ -49,9 +45,10 @@ from .const import (
     TIME_REFERENCE_SUNRISE,
     TIME_REFERENCE_SUNSET,
 )
+from .issues import create_issue, delete_issue, delete_stale_entity_issues
 from .logic import as_list
 from .schedule import normalize_boolean
-from .issues import create_issue, delete_issue, delete_stale_entity_issues
+from .state_helpers import temperature_to_celsius
 from .units import normalize_illuminance, normalize_irradiance, normalize_wind_speed
 
 _GLOBAL_ENTITY_KEYS = (
@@ -99,6 +96,8 @@ def _configured_entity_ids(config: dict[str, Any]) -> set[str]:
 
 def _iter_rules(hass: HomeAssistant) -> Iterable[dict[str, Any]]:
     for entry in hass.config_entries.async_entries(DOMAIN):
+        if entry.disabled_by is not None:
+            continue
         current = _merged(entry)
         for key in (CONF_TIME_RULES, CONF_GLOBAL_TIME_RULES):
             for raw_rule in as_list(current.get(key)):
@@ -131,27 +130,6 @@ def _state_available(state: State | None) -> bool:
     return state is not None and state.state not in {STATE_UNKNOWN, STATE_UNAVAILABLE}
 
 
-def _temperature_to_celsius(value: Any, unit: Any) -> float | None:
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return None
-    if not math.isfinite(numeric):
-        return None
-    if unit in (None, "", UnitOfTemperature.CELSIUS):
-        return numeric
-    try:
-        return float(
-            TemperatureConverter.convert(
-                numeric,
-                str(unit),
-                UnitOfTemperature.CELSIUS,
-            )
-        )
-    except (HomeAssistantError, TypeError, ValueError):
-        return None
-
-
 def _validate_temperature_entity(
     hass: HomeAssistant,
     owner_entry_id: str,
@@ -173,7 +151,7 @@ def _validate_temperature_entity(
     if raw_value is None:
         delete_issue(hass, owner_entry_id, "invalid_temperature_unit", entity_id)
         return
-    if _temperature_to_celsius(raw_value, unit) is None:
+    if temperature_to_celsius(raw_value, unit) is None:
         create_issue(
             hass,
             owner_entry_id,

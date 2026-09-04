@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -13,9 +13,9 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     ATTR_UNIT_OF_MEASUREMENT,
-    PERCENTAGE,
     STATE_UNAVAILABLE,
     STATE_UNKNOWN,
+    UnitOfRatio,
     UnitOfTemperature,
     UnitOfTime,
 )
@@ -33,10 +33,9 @@ from .const import (
     CONTACT_OPEN,
     CONTACT_TILTED,
     CONTACT_UNKNOWN,
-    STATUS_CONTACT_UNKNOWN,
+    STATUS_CONTACT_PROTECTION,
     STATUS_DISABLED,
     STATUS_DRY_RUN,
-    STATUS_FAILSAFE,
     STATUS_FROST_BLOCK,
     STATUS_FROST_PROTECTION,
     STATUS_HEAT_PROTECTION,
@@ -45,17 +44,21 @@ from .const import (
     STATUS_PAUSED,
     STATUS_PREVENTIVE,
     STATUS_RAIN_PROTECTION,
-    STATUS_CONTACT_PROTECTION,
     STATUS_SCHEDULE,
     STATUS_SOLAR_GAIN,
     STATUS_STORM_PROTECTION,
     STATUS_STRONG_HEAT,
-    STATUS_TILTED_LIMIT,
     STATUS_UNAVAILABLE,
     STATUS_WIND_PROTECTION,
 )
 from .contacts import classify_contact_state
 from .controller import SmartShadingController
+from .cover import (
+    legacy_source_unique_id,
+    migrate_legacy_source_unique_id,
+    remove_stale_dynamic_entities,
+    source_entity_registry_key,
+)
 from .entity import SmartShadingEntity
 from .state_helpers import (
     entity_display_name,
@@ -75,15 +78,10 @@ REASON_CODES = [
     "mode_heat_protection",
     "time_rule_event",
     "time_rule_open_retry",
+    "time_rule_open_skipped_heat_protection",
     "time_rule_closed",
     "time_rule_close_blocked_contact",
     "time_rule_close_contact_delay",
-    "contact_closing_protection",
-    "contact_tilted_safety",
-    "contact_unknown_block",
-    "contact_unknown_stop",
-    "contact_unknown_open",
-    "contact_unknown_safe_position",
     "all_manual_override",
     "storm_protection",
     "wind_protection",
@@ -107,9 +105,6 @@ SENSOR_DESCRIPTIONS = (
             STATUS_DISABLED,
             STATUS_PAUSED,
             STATUS_CONTACT_PROTECTION,
-            STATUS_TILTED_LIMIT,
-            STATUS_CONTACT_UNKNOWN,
-            STATUS_FAILSAFE,
             STATUS_FROST_BLOCK,
             STATUS_FROST_PROTECTION,
             STATUS_RAIN_PROTECTION,
@@ -137,13 +132,13 @@ SENSOR_DESCRIPTIONS = (
         key="heat_risk",
         translation_key="heat_risk",
         icon="mdi:thermometer-alert",
-        native_unit_of_measurement=PERCENTAGE,
+        native_unit_of_measurement=UnitOfRatio.PERCENTAGE,
     ),
     SensorEntityDescription(
         key="sun_load",
         translation_key="sun_load",
         icon="mdi:white-balance-sunny",
-        native_unit_of_measurement=PERCENTAGE,
+        native_unit_of_measurement=UnitOfRatio.PERCENTAGE,
     ),
     SensorEntityDescription(
         key="forecast_age",
@@ -238,6 +233,7 @@ class SmartShadingSensor(SmartShadingEntity, SensorEntity):
             "decision_diagnostics",
             "command_queue_depth",
             "time_rule_conflict_count",
+            "pending_time_rule_open_count",
             "pending_time_rule_close_count",
         }:
             self._attr_entity_registry_enabled_default = False
@@ -388,7 +384,7 @@ class SmartShadingContactStateSensor(SmartShadingEntity, SensorEntity):
     """Expose the contact state for one configured window or cover."""
 
     _attr_device_class = SensorDeviceClass.ENUM
-    _attr_options = [
+    _attr_options: ClassVar[list[str]] = [
         CONTACT_CLOSED,
         CONTACT_TILTED,
         CONTACT_OPEN,
@@ -406,10 +402,11 @@ class SmartShadingContactStateSensor(SmartShadingEntity, SensorEntity):
         # The unique ID follows the configured window/cover, not the source
         # sensor. This creates one clearly named status entity per assignment
         # and keeps it stable when the user replaces the physical contact.
+        registry = er.async_get(controller.hass)
         super().__init__(
             entry,
             controller,
-            f"contact_state_{cover_entity_id}",
+            f"contact_state_{source_entity_registry_key(registry, cover_entity_id)}",
         )
         self._cover_entity_id = cover_entity_id
         self._contact_entity_id = contact_entity_id
@@ -497,6 +494,16 @@ async def async_setup_entry(
                 continue
             contact_assignments.append((cover_entity_id, contact_entity_id))
 
+    entity_registry = er.async_get(hass)
+    for cover_entity_id, _contact_entity_id in contact_assignments:
+        migrate_legacy_source_unique_id(
+            entity_registry,
+            entry_id=entry.entry_id,
+            domain="sensor",
+            role="contact_state",
+            source_entity_id=cover_entity_id,
+        )
+
     contact_entities = [
         SmartShadingContactStateSensor(
             entry,
@@ -509,17 +516,22 @@ async def async_setup_entry(
     entities.extend(contact_entities)
 
     active_contact_unique_ids = {entity.unique_id for entity in contact_entities}
-    entity_registry = er.async_get(hass)
+    active_contact_unique_ids.update(
+        legacy_source_unique_id(
+            entry.entry_id,
+            "contact_state",
+            cover_entity_id,
+        )
+        for cover_entity_id, _contact_entity_id in contact_assignments
+    )
     contact_unique_id_prefix = f"{entry.entry_id}_contact_state_"
-    for registry_entry in er.async_entries_for_config_entry(
-        entity_registry, entry.entry_id
-    ):
-        if (
-            registry_entry.domain == "sensor"
-            and registry_entry.unique_id.startswith(contact_unique_id_prefix)
-            and registry_entry.unique_id not in active_contact_unique_ids
-        ):
-            entity_registry.async_remove(registry_entry.entity_id)
+    remove_stale_dynamic_entities(
+        entity_registry,
+        entry_id=entry.entry_id,
+        domain="sensor",
+        unique_id_prefix=contact_unique_id_prefix,
+        active_unique_ids=active_contact_unique_ids,
+    )
 
     room_temperature_unique_id = f"{entry.entry_id}_room_temperature"
     if not room_temperature_entity_id:

@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 import voluptuous as vol
-
 from homeassistant import config_entries
 from homeassistant.config_entries import (
     ConfigEntry,
@@ -15,14 +14,53 @@ from homeassistant.config_entries import (
 from homeassistant.core import callback
 from homeassistant.helpers import selector
 
+from .config_flow_helpers import (
+    _OPTIONAL_GLOBAL_ENTITIES,
+    _action_summary,
+    _behavior_schema,
+    _clean_global_input,
+    _clean_global_manual_override_input,
+    _clean_global_positions_input,
+    _configured_global_manual_override_minutes,
+    _configured_global_position_values,
+    _configured_workday_entity,
+    _cover_contact_schema,
+    _covers_in_other_rooms,
+    _covers_schema,
+    _entity_display_name,
+    _entry_kind,
+    _global_entry,
+    _global_manual_override_schema,
+    _global_positions_schema,
+    _global_schema,
+    _integration_cover_entities,
+    _normalized_rule_from_input,
+    _ordered_covers,
+    _positions_schema,
+    _room_schema,
+    _rule_basics_schema,
+    _rule_choice_selector,
+    _rule_defaults,
+    _rule_reference_schema,
+    _rule_time_or_offset_schema,
+    _trigger_summary,
+    _validate_complete_time_rule,
+    _validate_cover_groups,
+    _validate_global_position_settings,
+    _validate_global_settings,
+    _validate_room_position_settings,
+    _validate_rule_basics,
+    _validate_temperatures,
+    _workday_dependent_rules_exist,
+)
 from .const import (
     CONF_CONFIRM_DELETE,
     CONF_COVER_CONTACTS,
     CONF_ENTRY_TYPE,
-    CONF_GLOBAL_TIME_RULES,
+    CONF_GLOBAL_MANUAL_OVERRIDE_MINUTES,
     CONF_GLOBAL_POSITION_OVERRIDES,
     CONF_GLOBAL_POSITION_VALUES,
-    CONF_GLOBAL_MANUAL_OVERRIDE_MINUTES,
+    CONF_GLOBAL_TIME_RULES,
     CONF_MANUAL_OVERRIDE_MINUTES,
     CONF_OPENING_CONTACT,
     CONF_ROOM_NAME,
@@ -44,57 +82,20 @@ from .const import (
     RULE_SCOPE_GLOBAL,
     RULE_SCOPE_ROOM,
 )
-from .global_transfers import append_global_time_rule_to_rooms
+from .global_transfers import (
+    append_global_time_rule_to_rooms,
+    migration_rule_tombstone,
+    schedule_room_entry_reloads,
+)
 from .logic import as_list
 from .schedule import normalize_boolean, normalize_rule
-
-
-from .config_flow_helpers import (
-    _OPTIONAL_GLOBAL_ENTITIES,
-    _action_summary,
-    _behavior_schema,
-    _clean_global_input,
-    _clean_global_positions_input,
-    _clean_global_manual_override_input,
-    _configured_global_position_values,
-    _configured_global_manual_override_minutes,
-    _configured_workday_entity,
-    _cover_contact_schema,
-    _covers_in_other_rooms,
-    _covers_schema,
-    _entity_display_name,
-    _entry_kind,
-    _global_entry,
-    _global_schema,
-    _global_positions_schema,
-    _global_manual_override_schema,
-    _integration_cover_entities,
-    _normalized_rule_from_input,
-    _ordered_covers,
-    _room_schema,
-    _positions_schema,
-    _rule_basics_schema,
-    _rule_choice_selector,
-    _rule_defaults,
-    _rule_reference_schema,
-    _rule_time_or_offset_schema,
-    _trigger_summary,
-    _validate_complete_time_rule,
-    _validate_cover_groups,
-    _validate_global_settings,
-    _validate_global_position_settings,
-    _validate_room_position_settings,
-    _validate_rule_basics,
-    _validate_temperatures,
-    _workday_dependent_rules_exist,
-)
 from .schedule_conflicts import first_blocking_conflict
 
 
 class SmartShadingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Create central settings first, then any number of rooms."""
 
-    VERSION = 19
+    VERSION = 20
     MINOR_VERSION = 0
 
     def __init__(self) -> None:
@@ -384,15 +385,17 @@ class SmartShadingOptionsFlow(OptionsFlowWithReload):
     def _rules_key(self) -> str:
         return CONF_GLOBAL_TIME_RULES if self._rule_scope == RULE_SCOPE_GLOBAL else CONF_TIME_RULES
 
-    def _rules(self) -> list[dict[str, Any]]:
+    def _rules(self, *, include_disabled: bool = False) -> list[dict[str, Any]]:
+        """Return normalized rules, optionally retaining inactive legacy rules."""
         rules: list[dict[str, Any]] = []
         used_ids: set[str] = set()
         room_covers = self._room_covers_list()
         key = self._rules_key()
         for index, raw_rule in enumerate(as_list(self._current().get(key)), start=1):
-            if not isinstance(raw_rule, dict) or not normalize_boolean(
-                raw_rule.get(CONF_RULE_ENABLED), True
-            ):
+            if not isinstance(raw_rule, dict):
+                continue
+            enabled = normalize_boolean(raw_rule.get(CONF_RULE_ENABLED), True)
+            if not enabled and not include_disabled:
                 continue
             try:
                 rule = normalize_rule(raw_rule)
@@ -403,10 +406,12 @@ class SmartShadingOptionsFlow(OptionsFlowWithReload):
                 rule[CONF_RULE_COVERS] = [
                     cover for cover in rule[CONF_RULE_COVERS] if cover in room_covers
                 ]
-                if not rule[CONF_RULE_COVERS]:
+                if not rule[CONF_RULE_COVERS] and enabled:
                     continue
             else:
                 rule[CONF_RULE_COVERS] = []
+            if not enabled:
+                rule[CONF_RULE_ENABLED] = False
             rule_id = str(rule.get(CONF_RULE_ID) or "").strip()
             if not rule_id or rule_id in used_ids:
                 base = f"legacy-{index}"
@@ -443,81 +448,114 @@ class SmartShadingOptionsFlow(OptionsFlowWithReload):
             None,
         )
 
-    def _schedule_all_room_reloads(self) -> None:
-        """Reload every room once after a central options update."""
-        for room_entry in self.hass.config_entries.async_entries(DOMAIN):
-            if _entry_kind(room_entry) != ENTRY_TYPE_ROOM:
-                continue
-            if room_entry.state.recoverable:
-                self.hass.config_entries.async_schedule_reload(room_entry.entry_id)
-
     def _save_options(
         self,
         changes: dict[str, Any],
         *,
         remove_keys: tuple[str, ...] = (),
+        reload_room_entry_ids: list[str] | None = None,
     ) -> ConfigFlowResult:
         options = dict(self.config_entry.options)
         for key in remove_keys:
             options.pop(key, None)
         options.update(changes)
-        if self._kind() == ENTRY_TYPE_GLOBAL:
-            # The central entry keeps an update listener for shared coordinator
-            # data only. Schedule dependent rooms here exactly once so central
-            # transfers also take effect when the stored central value itself
-            # did not change.
-            self._schedule_all_room_reloads()
-        return self.async_create_entry(data=options)
+        result = self.async_create_entry(data=options)
+        if reload_room_entry_ids:
+            # The options manager commits this result synchronously before the
+            # event loop gets another turn. Deferring the reload scheduling by
+            # one callback therefore covers both a changed central entry and a
+            # central no-op without racing the commit.
+            self.hass.loop.call_soon(
+                schedule_room_entry_reloads,
+                self.hass,
+                tuple(dict.fromkeys(reload_room_entry_ids)),
+            )
+        return result
 
     def _save_rules(self, rules: list[dict[str, Any]]) -> ConfigFlowResult:
-        """Persist a room's own rule list."""
-        return self._save_options({CONF_TIME_RULES: rules})
+        """Persist active room rules without discarding inactive migrated rules."""
+        merged = list(rules)
+        known_ids = {
+            str(rule.get(CONF_RULE_ID) or "").strip()
+            for rule in merged
+            if str(rule.get(CONF_RULE_ID) or "").strip()
+        }
+        merged.extend(
+            rule
+            for rule in self._rules(include_disabled=True)
+            if not normalize_boolean(rule.get(CONF_RULE_ENABLED), True)
+            and str(rule.get(CONF_RULE_ID) or "").strip() not in known_ids
+        )
+        return self._save_options({CONF_TIME_RULES: merged})
 
     def _distribute_new_global_rule(
         self, rule: dict[str, Any]
-    ) -> ConfigFlowResult:
-        """Append one new rule to every room without storing it centrally."""
-        append_global_time_rule_to_rooms(
+    ) -> tuple[ConfigFlowResult | None, str | None]:
+        """Append one new rule atomically or return its room conflict."""
+        updated_entries, conflict = append_global_time_rule_to_rooms(
             self.hass, rule, schedule_reload=False
         )
-        return self._save_options(
-            {},
-            remove_keys=(CONF_GLOBAL_TIME_RULES, CONF_TIME_RULES),
+        if conflict is not None:
+            return None, conflict
+        removable_rule_keys = tuple(
+            key
+            for key in (CONF_GLOBAL_TIME_RULES, CONF_TIME_RULES)
+            if not as_list(self.config_entry.options.get(key))
+        )
+        return (
+            self._save_options(
+                {},
+                # A partial v20 migration retains its non-empty source under
+                # one of these legacy keys until every room has a usable
+                # cover.  The create-only wizard may clear empty draft fields,
+                # but must not discard that retry source.
+                remove_keys=removable_rule_keys,
+                reload_room_entry_ids=updated_entries,
+            ),
+            None,
         )
 
     def _transfer_positions_to_rooms(
         self, values: dict[str, int], selected_keys: set[str]
-    ) -> None:
+    ) -> list[str]:
         """Copy central position values into every existing room."""
         if not selected_keys:
-            return
+            return []
+        updated_entries: list[str] = []
         for room_entry in self.hass.config_entries.async_entries(DOMAIN):
             if _entry_kind(room_entry) != ENTRY_TYPE_ROOM:
                 continue
             options = dict(room_entry.options)
             for key in selected_keys:
                 options[key] = int(values[key])
-            self.hass.config_entries.async_update_entry(
+            if self.hass.config_entries.async_update_entry(
                 room_entry, options=options
-            )
+            ):
+                updated_entries.append(room_entry.entry_id)
+        return updated_entries
 
-    def _transfer_manual_override_to_rooms(self, minutes: int) -> None:
+    def _transfer_manual_override_to_rooms(self, minutes: int) -> list[str]:
         """Replace every room's manual-override duration with the central value."""
+        updated_entries: list[str] = []
         for room_entry in self.hass.config_entries.async_entries(DOMAIN):
             if _entry_kind(room_entry) != ENTRY_TYPE_ROOM:
                 continue
             options = dict(room_entry.options)
             options[CONF_MANUAL_OVERRIDE_MINUTES] = int(minutes)
-            self.hass.config_entries.async_update_entry(
+            if self.hass.config_entries.async_update_entry(
                 room_entry, options=options
-            )
+            ):
+                updated_entries.append(room_entry.entry_id)
+        return updated_entries
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         # The central entry has an update listener for shared coordinator data.
         # It has no runtime platforms of its own, so reloading the central entry
         # would be redundant and is incompatible with OptionsFlowWithReload when
         # an update listener is registered. Dependent rooms are reloaded once by
-        # _save_options after every central options update.
+        # the post-commit global update listener. One-time transfers update and
+        # reload their changed room entries independently because a create-only
+        # central save may otherwise be a no-op and fire no update listener.
         self.automatic_reload = self._kind() != ENTRY_TYPE_GLOBAL
         if self._kind() == ENTRY_TYPE_GLOBAL:
             return await self.async_step_global_menu(user_input)
@@ -576,9 +614,13 @@ class SmartShadingOptionsFlow(OptionsFlowWithReload):
                 # Saving the central position page intentionally replaces all
                 # corresponding room positions. Rooms may be customized again
                 # afterwards until the next central save.
-                self._transfer_positions_to_rooms(values, set(values))
+                updated_entries = self._transfer_positions_to_rooms(
+                    values, set(values)
+                )
                 return self._save_options(
-                    cleaned, remove_keys=(CONF_GLOBAL_POSITION_OVERRIDES,)
+                    cleaned,
+                    remove_keys=(CONF_GLOBAL_POSITION_OVERRIDES,),
+                    reload_room_entry_ids=updated_entries,
                 )
         return self.async_show_form(
             step_id="global_positions",
@@ -592,8 +634,11 @@ class SmartShadingOptionsFlow(OptionsFlowWithReload):
         if user_input is not None:
             cleaned = _clean_global_manual_override_input(user_input)
             minutes = cleaned[CONF_GLOBAL_MANUAL_OVERRIDE_MINUTES]
-            self._transfer_manual_override_to_rooms(minutes)
-            return self._save_options(cleaned)
+            updated_entries = self._transfer_manual_override_to_rooms(minutes)
+            return self._save_options(
+                cleaned,
+                reload_room_entry_ids=updated_entries,
+            )
         return self.async_show_form(
             step_id="global_manual_override",
             data_schema=_global_manual_override_schema(
@@ -630,11 +675,13 @@ class SmartShadingOptionsFlow(OptionsFlowWithReload):
                 room_cover_set = set(room_covers)
                 self._rule_scope = RULE_SCOPE_ROOM
                 rules = []
-                for rule in self._rules():
+                for rule in self._rules(include_disabled=True):
                     rule[CONF_RULE_COVERS] = [
                         cover for cover in rule[CONF_RULE_COVERS] if cover in room_cover_set
                     ]
-                    if rule[CONF_RULE_COVERS]:
+                    if rule[CONF_RULE_COVERS] or not normalize_boolean(
+                        rule.get(CONF_RULE_ENABLED), True
+                    ):
                         rules.append(rule)
                 self._pending_cover_data = dict(user_input)
                 self._pending_cover_data[CONF_TIME_RULES] = rules
@@ -895,30 +942,36 @@ class SmartShadingOptionsFlow(OptionsFlowWithReload):
                     # an independent copy to every existing room. It does not
                     # maintain a central rule list and therefore offers no later
                     # global edit or delete operation.
-                    self._rule_draft = {}
-                    self._editing_rule_id = None
-                    return self._distribute_new_global_rule(updated)
-
-                rules = self._rules()
-                conflict = first_blocking_conflict(
-                    updated,
-                    rules,
-                    self._room_covers(),
-                    editing_rule_id=self._editing_rule_id,
-                )
-                if conflict:
-                    errors["base"] = conflict
-                else:
-                    if self._editing_rule_id is None:
-                        rules.append(updated)
+                    result, conflict = self._distribute_new_global_rule(updated)
+                    if conflict is not None:
+                        errors["base"] = conflict
                     else:
-                        rules = [
-                            updated if rule[CONF_RULE_ID] == self._editing_rule_id else rule
-                            for rule in rules
-                        ]
-                    self._rule_draft = {}
-                    self._editing_rule_id = None
-                    return self._save_rules(rules)
+                        self._rule_draft = {}
+                        self._editing_rule_id = None
+                        assert result is not None
+                        return result
+
+                else:
+                    rules = self._rules()
+                    conflict = first_blocking_conflict(
+                        updated,
+                        rules,
+                        self._room_covers(),
+                        editing_rule_id=self._editing_rule_id,
+                    )
+                    if conflict:
+                        errors["base"] = conflict
+                    else:
+                        if self._editing_rule_id is None:
+                            rules.append(updated)
+                        else:
+                            rules = [
+                                updated if rule[CONF_RULE_ID] == self._editing_rule_id else rule
+                                for rule in rules
+                            ]
+                        self._rule_draft = {}
+                        self._editing_rule_id = None
+                        return self._save_rules(rules)
         return self.async_show_form(
             step_id=step_id,
             data_schema=_rule_time_or_offset_schema(
@@ -979,6 +1032,8 @@ class SmartShadingOptionsFlow(OptionsFlowWithReload):
                     for rule in self._rules()
                     if rule[CONF_RULE_ID] != self._selected_rule_id
                 ]
+                if tombstone := migration_rule_tombstone(selected):
+                    rules.append(tombstone)
                 self._selected_rule_id = None
                 return self._save_rules(rules)
             self._selected_rule_id = None

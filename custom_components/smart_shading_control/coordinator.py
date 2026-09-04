@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import date, datetime, timedelta
 import logging
-import math
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from homeassistant.components.weather.const import WeatherEntityFeature
@@ -14,13 +13,10 @@ from homeassistant.const import (
     ATTR_ENTITY_ID,
     STATE_UNAVAILABLE,
     STATE_UNKNOWN,
-    UnitOfTemperature,
 )
 from homeassistant.core import CoreState, HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
-from homeassistant.util.unit_conversion import TemperatureConverter
 
 from .const import (
     CONF_WEATHER_ENTITY,
@@ -28,6 +24,7 @@ from .const import (
     FORECAST_REFRESH_MINUTES,
 )
 from .global_repairs import update_global_repairs
+from .state_helpers import temperature_to_celsius
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -208,7 +205,7 @@ class SmartShadingDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     if not isinstance(raw_item, dict):
                         continue
                     item = dict(raw_item)
-                    converted = _temperature_to_celsius(
+                    converted = temperature_to_celsius(
                         item.get("temperature"), temperature_unit
                     )
                     if converted is None:
@@ -228,7 +225,7 @@ class SmartShadingDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     forecast_error=None,
                 )
                 return result
-            except Exception as err:  # noqa: BLE001 - provider-dependent action
+            except Exception as err:
                 errors.append(f"{forecast_type}: {type(err).__name__}: {err}")
                 _LOGGER.debug(
                     "Shared %s forecast could not be loaded from %s",
@@ -306,7 +303,7 @@ class SmartShadingDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     value = (response or {}).get(entity_id, {}).get("workday")
                     if isinstance(value, bool):
                         self._workday_cache[key] = value
-                except Exception:  # noqa: BLE001 - optional compatibility fallback
+                except Exception:
                     _LOGGER.debug(
                         "Could not check Workday state for %s on %s",
                         entity_id,
@@ -362,21 +359,3 @@ async def async_get_or_create_coordinator(
         ):
             await coordinator.async_ensure_ready(force=True)
     return coordinator
-
-
-def _temperature_to_celsius(value: Any, unit: Any) -> float | None:
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return None
-    if not math.isfinite(numeric):
-        return None
-    if unit in (None, "", UnitOfTemperature.CELSIUS):
-        return numeric
-    try:
-        converted = float(
-            TemperatureConverter.convert(numeric, str(unit), UnitOfTemperature.CELSIUS)
-        )
-        return converted if math.isfinite(converted) else None
-    except (HomeAssistantError, TypeError, ValueError):
-        return None

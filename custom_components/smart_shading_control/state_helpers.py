@@ -5,7 +5,10 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from homeassistant.components.cover import ATTR_CURRENT_POSITION, ATTR_CURRENT_TILT_POSITION
+from homeassistant.components.cover import (
+    ATTR_CURRENT_POSITION,
+    ATTR_CURRENT_TILT_POSITION,
+)
 from homeassistant.const import (
     ATTR_UNIT_OF_MEASUREMENT,
     STATE_CLOSED,
@@ -75,19 +78,6 @@ def attribute_float(state: State | None, attribute: str) -> float | None:
         return None
 
 
-def numeric_state(hass: HomeAssistant, entity_id: str | None) -> float | None:
-    if not entity_id:
-        return None
-    state = hass.states.get(entity_id)
-    if state is None:
-        return None
-    try:
-        numeric = float(state.state)
-        return numeric if math.isfinite(numeric) else None
-    except (TypeError, ValueError):
-        return None
-
-
 def temperature_to_celsius(value: Any, unit: Any) -> float | None:
     try:
         numeric = float(value)
@@ -126,7 +116,7 @@ def position_from_state(state: State | None) -> int | None:
         return None
     position = attribute_float(state, ATTR_CURRENT_POSITION)
     if position is not None:
-        return max(0, min(100, int(round(position))))
+        return max(0, min(100, round(position)))
     if state.state == STATE_OPEN:
         return 100
     if state.state == STATE_CLOSED:
@@ -136,4 +126,4 @@ def position_from_state(state: State | None) -> int | None:
 
 def tilt_position_from_state(state: State | None) -> int | None:
     position = attribute_float(state, ATTR_CURRENT_TILT_POSITION)
-    return None if position is None else max(0, min(100, int(round(position))))
+    return None if position is None else max(0, min(100, round(position)))

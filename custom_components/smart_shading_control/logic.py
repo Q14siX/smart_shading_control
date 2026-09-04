@@ -110,9 +110,9 @@ def normalized_score(value: float | None, low: float, high: float) -> float:
 
 
 def is_opening_target(
-    requested: int | float,
-    current: int | float | None,
-    configured_open_position: int | float,
+    requested: float,
+    current: float | None,
+    configured_open_position: float,
     *,
     binary_cover: bool = False,
 ) -> bool:
@@ -200,7 +200,7 @@ def manual_movement_trigger(
 
 
 def binary_cover_target(
-    requested: int | float,
+    requested: float,
     *,
     safety_forced: bool = False,
     opening_requested: bool | None = None,
@@ -246,7 +246,7 @@ def calculate_heat_risk(
         + solar_score * 15.0
         + trend_score * 10.0
     )
-    return int(round(clamp(score, 0.0, 100.0)))
+    return round(clamp(score, 0.0, 100.0))
 
 
 def choose_dynamic_level(

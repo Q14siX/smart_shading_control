@@ -13,5 +13,5 @@
   "integration_type": "service",
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/Q14siX/smart_shading_control/issues",
-  "version": "20260903.085028"
+  "version": "20260904.091706"
 }

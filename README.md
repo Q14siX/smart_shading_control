@@ -13,7 +13,7 @@
 
 **Smart Shading Control** ist eine vollständig über die Home-Assistant-Oberfläche konfigurierbare Integration zur intelligenten, sicheren und raumbezogenen Steuerung von Rollläden und Jalousien.
 
-Aktuelle Version: **`20260903.085028`**  
+Aktuelle Version: **`20260904.091706`**  
 Veröffentlichungsstatus: **Stable**
 
 [Deutsch](#deutsch) · [English](#english)
@@ -33,7 +33,7 @@ Veröffentlichungsstatus: **Stable**
 - optionale Fenster- oder Türkontakte je Rollladen
 - Wind-, Sturm-, Regen- und Frostschutz
 - manuelle Übersteuerungen mit einstellbarer Sperrzeit
-- optionale Wiederherstellung aktiver manueller Sperren nach einem Neustart
+- neustartsichere Wiederherstellung aktiver manueller Sperren und weiterer Schutzzeiten
 - Trockenlaufmodus ohne physische Fahrbefehle
 - virtuelle Raum- und Einzel-Cover
 - Status-, Diagnose-, Entscheidungs- und Reparaturentitäten
@@ -105,7 +105,7 @@ Jeder Raum erhält einen eigenen Eintrag mit ausschließlich den Geräten und Ei
 - individuelle Zielpositionen
 - individuelle Zeitregeln
 - manuelle Sperrzeit
-- optionale Speicherung manueller Übersteuerungen
+- neustartsichere Speicherung manueller Übersteuerungen
 - optionale Lamellenpositionen
 
 Ein Rollladen kann nicht gleichzeitig mehreren Räumen zugeordnet werden.
@@ -142,12 +142,29 @@ Erkennt die Integration eine manuelle Fahrt, wird der betroffene Rollladen für 
 
 - Standardwert: **240 Minuten**
 - die Dauer kann global übertragen und anschließend je Raum geändert werden
-- aktive Sperren können optional über einen Home-Assistant-Neustart erhalten bleiben
+- aktive Sperren werden immer mit ihrem absoluten Ablaufzeitpunkt gespeichert und nach Neustart oder Reload mit der ursprünglichen Restlaufzeit wiederhergestellt
+- bereits abgelaufene Sperren werden nicht wiederhergestellt; ein Neustart beginnt die konfigurierte Dauer nicht erneut
+- Sperren und Ablaufzeiten werden für jeden Rollladen getrennt geführt, auch für den ersten Rollladen einer Gruppe
 - am lokalen Tageswechsel werden temporäre Sperren beendet
 - eine neu ausgelöste Zeitregel darf eine ältere manuelle Sperre gezielt ersetzen
 - Wiederholungsversuche einer bereits früher ausgelösten Öffnungsregel dürfen eine spätere manuelle Bedienung nicht aufheben
 
-Konfigurierte Sicherheitsmaßnahmen können eine manuelle Sperre übersteuern, wenn dies zum Schutz der Anlage erforderlich ist.
+Konfigurierte Sicherheitsmaßnahmen können eine manuelle Sperre übersteuern, wenn dies zum Schutz der Anlage erforderlich ist. Bei einem aktiven Wind-, Sturm-, Regen- oder Frostschutz mit vorgegebener Sicherheitsposition wird ein manueller Positionsbefehl, der den Rollladen weiter in die unsichere Richtung fahren würde, auf diese Position begrenzt. Eine Fahrt in die sicherere Richtung bleibt möglich. Die Frost-Aktion **Automatik blockieren** sperrt entsprechend ihrer Konfiguration nur Automatikfahrten. Ein ausdrücklich ausgelöster manueller STOP hat als unmittelbarer Benutzer- beziehungsweise Notstopp Vorrang vor einer noch ausstehenden Fahrt.
+
+### Neustart- und Reload-Verhalten
+
+Restart-relevante Zustände werden in Home Assistants persistentem Speicher abgelegt, bevor der Raumcontroller mit seiner ersten automatischen Auswertung beginnt. Dazu gehören insbesondere:
+
+- die absoluten Ablaufzeitpunkte manueller Sperren pro Rollladen
+- Cooldowns, letzte bekannte Positionen sowie Kennzeichen eigener Positions- und Lamellenbefehle
+- anhaltende und verzögerte Zustände von Zeitregeln, einschließlich ausstehender Öffnungs- und Schließaktionen
+- absolute Aktivierungs-, Bestätigungs- und Entwarnungszeiten des Wetter- und Frostschutzes
+- begrenzte Wiederholungszustände bei vorübergehend nicht erreichbaren Providern
+- ein zeitlich begrenztes Sollwertkennzeichen für einen bereits angenommenen, aber vor dem Restart noch nicht vollständig gemeldeten Fahrbefehl
+
+Nach einem Neustart werden Live-Zustände wie aktuelle Sensorwerte, Sonnenstand, Kontakte und der daraus folgende Sollwert neu aus Home Assistant ermittelt. Bereits in Arbeit befindliche Python-Tasks oder Warteschlangeneinträge werden nicht blind wiederholt; fachlich notwendige Aktionen werden anhand der gespeicherten Zustände neu bewertet. Positionsänderungen während einer Nichtverfügbarkeit oder eines Reloads werden gegen die zuvor gespeicherte Ausgangslage geprüft, damit eine Handbedienung nicht durch eine sofortige Automatikfahrt überschrieben wird.
+
+Ist ein bereits vorhandener persistenter Schutzspeicher beschädigt oder semantisch ungültig, startet der betroffene Raum nicht im ungeschützten Zustand. Der Config Entry bleibt stattdessen bis zur Wiederherstellung beziehungsweise bewussten Bereinigung des Speichers nicht bereit.
 
 ### Betriebsarten
 
@@ -185,9 +202,9 @@ Die Steuerung berücksichtigt unter anderem folgende Grundsätze:
 7. Mindeständerung und Mindestfahrabstand verhindern unnötige oder zu häufige Fahrbefehle.
 8. Im Trockenlauf werden Entscheidungen berechnet, aber keine Befehle an Geräte gesendet.
 
-### Erstveröffentlichung
+### Release-Historie
 
-Diese Version ist die **erste öffentliche Stable-Veröffentlichung** von Smart Shading Control. Frühere interne Entwicklungs- und Teststände sind keine öffentlichen Releases und werden daher nicht als Update-Historie geführt.
+Die Version **`20260903.085028`** vom 3. September 2026 war die **erste öffentliche Stable-Veröffentlichung** von Smart Shading Control. Frühere interne Entwicklungs- und Teststände sind keine öffentlichen Releases und werden daher nicht als Update-Historie geführt.
 
 Für die Erstinstallation wird Smart Shading Control über HACS oder manuell installiert und anschließend vollständig über die Home-Assistant-Oberfläche eingerichtet. Nach der Installation ist ein vollständiger Neustart von Home Assistant erforderlich.
 
@@ -227,7 +244,7 @@ Smart Shading Control wird unter der [MIT-Lizenz](LICENSE) veröffentlicht.
 
 **Smart Shading Control** is a Home Assistant custom integration for intelligent, safe and room-based control of shutters and blinds. It is configured entirely through the Home Assistant user interface.
 
-Current version: **`20260903.085028`**  
+Current version: **`20260904.091706`**  
 Release status: **Stable**
 
 ### Main features
@@ -241,7 +258,7 @@ Release status: **Stable**
 - optional opening contact for each cover
 - wind, storm, rain and frost protection
 - configurable manual override duration
-- optional persistence of active manual overrides across restarts
+- restart-safe persistence of active manual overrides and other protection deadlines
 - dry-run mode without physical commands
 - virtual room and individual cover entities
 - diagnostic, decision, status and repair entities
@@ -299,11 +316,21 @@ A real transition from closed to open or tilted can reopen a cover that was prev
 
 Detected manual movement temporarily excludes the affected cover from normal automatic commands. Physical switches and gateways that only report a changed position are supported as well.
 
-The default duration is 240 minutes. It can be transferred globally and changed per room afterwards. Active overrides may optionally survive a Home Assistant restart. Safety protection may still enforce a safer position when required.
+The default duration is 240 minutes. It can be transferred globally and changed per room afterwards. Active overrides are always stored per cover with their absolute expiry. A restart or reload restores only the original remaining time: expired overrides are discarded, and the configured duration is not started again. Temporary overrides end at the next local midnight.
 
-### First public release
+Configured wind, storm, rain or frost protection with a defined safety position may still enforce that position. A manual position request that would move farther into an unsafe direction is clamped to it, while a request in the safer direction remains possible. The frost action **block automation** restricts automatic commands only, as configured. An explicit manual STOP retains precedence as an immediate user or emergency stop.
 
-This version is the **first public Stable release** of Smart Shading Control. Earlier internal development and test builds are not public releases and are therefore not presented as an upgrade history.
+### Restart and reload behavior
+
+Restart-relevant state is loaded from Home Assistant's persistent storage before the first automatic room evaluation. This includes per-cover manual-override deadlines, cooldowns, last-known positions, markers for the integration's own position and tilt commands, pending and persistent schedule state, absolute weather-protection timers, bounded provider retry state, and a short-lived target marker for an accepted command whose resulting position had not yet been reported.
+
+Live sensor, sun, contact and cover state is read again and the desired target is recomputed. In-flight Python tasks and queued service calls are not blindly replayed. Position changes that happened while an entity or the integration was unavailable are compared with the previous persisted baseline so that a manual movement is not immediately overwritten by automation.
+
+If an existing persistent safety store is corrupt or semantically invalid, the affected room fails closed: its Config Entry stays not ready until the store is recovered or deliberately cleared, instead of starting without the protection state.
+
+### Release history
+
+Version **`20260903.085028`**, released on 3 September 2026, was the **first public Stable release** of Smart Shading Control. Earlier internal development and test builds are not public releases and are therefore not presented as an upgrade history.
 
 For a first installation, install Smart Shading Control through HACS or manually and configure it entirely through the Home Assistant user interface. A full Home Assistant restart is required after installation.
 

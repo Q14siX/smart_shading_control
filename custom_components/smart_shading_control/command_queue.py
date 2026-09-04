@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import heapq
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-import heapq
-import logging
 from time import monotonic
 from typing import Any
 
@@ -23,8 +23,9 @@ COMMAND_QUEUES_KEY = "command_queues"
 
 # Lower numbers run first.
 PRIORITY_EMERGENCY = 0
-PRIORITY_MANUAL = 10
+PRIORITY_MANUAL_STOP = 10
 PRIORITY_SAFETY = 20
+PRIORITY_MANUAL = 30
 PRIORITY_AUTOMATIC = 50
 PRIORITY_TILT = 60
 
@@ -73,9 +74,12 @@ class SmartShadingCommandQueue:
     """Serialize provider calls and discard obsolete queued targets.
 
     Commands are coalesced per physical cover and command channel. A newer
-    vertical command replaces an older vertical command which has not started,
-    while tilt remains independent. Emergency stop commands use the vertical
-    channel and a higher priority, so they invalidate queued movement targets.
+    command replaces an older command which has not started only when its
+    priority is at least as high. Tilt remains independent. Emergency stop
+    commands therefore invalidate queued movement targets and cannot themselves
+    be displaced by a later normal automatic target. A manual STOP remains more
+    urgent than asset protection, while a manual position target cannot displace
+    a queued weather-safety movement.
     """
 
     def __init__(
@@ -148,6 +152,8 @@ class SmartShadingCommandQueue:
         future: asyncio.Future[CommandResult] = loop.create_future()
         channel = coalesce_key or command_type
         key = (entity_id, channel)
+        requested_priority = int(priority)
+        blocked_result: CommandResult | None = None
 
         async with self._condition:
             # Shutdown may begin after the optimistic check above but before
@@ -163,39 +169,59 @@ class SmartShadingCommandQueue:
                 )
             previous = self._pending.get(key)
             if previous is not None and not previous.started:
-                self._superseded += 1
-                if not previous.future.done():
-                    previous.future.set_result(
-                        CommandResult(
-                            success=False,
-                            entity_id=previous.entity_id,
-                            command_type=previous.command_type,
-                            service=previous.service,
-                            completed_at=dt_util.utcnow(),
-                            skipped_reason="superseded",
-                            superseded=True,
-                        )
+                if requested_priority > previous.priority:
+                    # A numerically lower value has higher priority. Keep a
+                    # queued emergency/safety command authoritative instead of
+                    # letting a later ordinary target silently remove it.
+                    blocked_result = CommandResult(
+                        success=False,
+                        entity_id=entity_id,
+                        command_type=command_type,
+                        service=service,
+                        completed_at=dt_util.utcnow(),
+                        skipped_reason="higher_priority_pending",
+                        superseded=True,
                     )
+                    self._superseded += 1
+                    self._last_result = blocked_result
+                else:
+                    self._superseded += 1
+                    superseded_result = CommandResult(
+                        success=False,
+                        entity_id=previous.entity_id,
+                        command_type=previous.command_type,
+                        service=previous.service,
+                        completed_at=dt_util.utcnow(),
+                        skipped_reason="superseded",
+                        superseded=True,
+                    )
+                    self._last_result = superseded_result
+                    if not previous.future.done():
+                        previous.future.set_result(superseded_result)
 
-            self._sequence += 1
-            item = _QueuedCommand(
-                priority=int(priority),
-                sequence=self._sequence,
-                entity_id=entity_id,
-                command_type=command_type,
-                service=service,
-                service_data=dict(service_data or {}),
-                coalesce_key=channel,
-                context=context or Context(),
-                future=future,
-                is_valid=is_valid,
-                on_started=on_started,
-            )
-            self._pending[key] = item
-            heapq.heappush(self._heap, item)
-            self._ensure_worker_locked()
-            self._condition.notify()
+            if blocked_result is None:
+                self._sequence += 1
+                item = _QueuedCommand(
+                    priority=requested_priority,
+                    sequence=self._sequence,
+                    entity_id=entity_id,
+                    command_type=command_type,
+                    service=service,
+                    service_data=dict(service_data or {}),
+                    coalesce_key=channel,
+                    context=context or Context(),
+                    future=future,
+                    is_valid=is_valid,
+                    on_started=on_started,
+                )
+                self._pending[key] = item
+                heapq.heappush(self._heap, item)
+                self._ensure_worker_locked()
+                self._condition.notify()
         self._notify()
+
+        if blocked_result is not None:
+            return blocked_result
 
         try:
             return await future
@@ -307,9 +333,7 @@ class SmartShadingCommandQueue:
         """Wait before selecting the next item so new safety work can preempt."""
         if self._last_call_monotonic is None:
             return
-        remaining = self._spacing_seconds - (
-            monotonic() - self._last_call_monotonic
-        )
+        remaining = self._spacing_seconds - (monotonic() - self._last_call_monotonic)
         if remaining > 0:
             await asyncio.sleep(remaining)
 
@@ -361,7 +385,9 @@ class SmartShadingCommandQueue:
             try:
                 item.on_started(item.context, issued_at)
             except Exception as err:
-                _LOGGER.exception("Command start callback failed for %s", item.entity_id)
+                _LOGGER.exception(
+                    "Command start callback failed for %s", item.entity_id
+                )
                 self._failed += 1
                 result = CommandResult(
                     success=False,
@@ -392,7 +418,7 @@ class SmartShadingCommandQueue:
                     blocking=True,
                     context=item.context,
                 )
-        except Exception as err:  # Provider errors/timeouts return to the controller.
+        except Exception as err:  # noqa: BLE001
             self._last_call_monotonic = monotonic()
             self._failed += 1
             result = CommandResult(
@@ -427,9 +453,7 @@ class SmartShadingCommandQueue:
             self._active = None
             self._notify()
 
-    async def _async_finish_skipped(
-        self, item: _QueuedCommand, reason: str
-    ) -> None:
+    async def _async_finish_skipped(self, item: _QueuedCommand, reason: str) -> None:
         key = (item.entity_id, item.coalesce_key)
         async with self._condition:
             if self._pending.get(key) is item:
@@ -452,9 +476,7 @@ class SmartShadingCommandQueue:
         self._notify()
 
 
-def get_command_queue(
-    hass: HomeAssistant, owner_id: str
-) -> SmartShadingCommandQueue:
+def get_command_queue(hass: HomeAssistant, owner_id: str) -> SmartShadingCommandQueue:
     """Return the independent command queue for one room controller.
 
     Each room owns its own worker. A slow or failing provider command in one
@@ -473,9 +495,7 @@ def get_command_queue(
     return queue
 
 
-async def async_shutdown_command_queue(
-    hass: HomeAssistant, owner_id: str
-) -> None:
+async def async_shutdown_command_queue(hass: HomeAssistant, owner_id: str) -> None:
     """Shut down and remove one room-owned command queue."""
     runtime = hass.data.get(DOMAIN)
     if not isinstance(runtime, dict):

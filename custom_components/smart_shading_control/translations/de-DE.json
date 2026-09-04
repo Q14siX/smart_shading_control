@@ -70,16 +70,11 @@
           "heat_temperature": "Temperatur für Hitzeschutz",
           "strong_heat_temperature": "Temperatur für starken Hitzeschutz",
           "forecast_threshold": "Schwelle der Außentemperaturprognose",
-          "window_safe_position": "Sicherheitsposition bei geöffnetem Kontakt",
-          "tilted_min_position": "Mindestöffnung bei gekipptem Kontakt",
           "min_position_change": "Mindeständerung der Position",
           "min_move_interval": "Mindestabstand zwischen automatischen Fahrten",
           "manual_override_minutes": "Dauer der manuellen Übersteuerung (spätestens bis Tageswechsel)",
           "risk_hysteresis": "Hysterese des Hitzerisikos",
-          "failsafe_profile": "Fail-safe-Profil bei unbekanntem Kontakt",
-          "failsafe_position": "Fail-safe-Sicherheitsposition",
           "dry_run": "Testmodus ohne Fahrbefehle",
-          "persist_manual_overrides": "Manuelle Übersteuerungen über Neustarts speichern",
           "tilt_control_enabled": "Lamellensteuerung aktivieren"
         },
         "data_description": {
@@ -185,6 +180,9 @@
         }
       }
     },
+    "abort": {
+      "already_configured": "Diese zentrale Konfiguration ist bereits vorhanden."
+    },
     "error": {
       "no_covers": "Mindestens ein Rollladen muss ausgewählt werden.",
       "duplicate_cover": "Ein Rollladen wurde mehreren Gebäudeseiten zugeordnet.",
@@ -204,8 +202,8 @@
       "rule_no_weekdays": "Wähle mindestens einen Wochentag aus.",
       "rule_conflict_opposite_action": "Für dieselben Rollläden existiert zur gleichen Zeit bereits eine gegensätzliche Fahraktion.",
       "rule_conflict_duplicate": "Eine inhaltlich identische Zeitregel existiert bereits.",
-      "integration_cover_not_allowed": "Von Smart Shading Control erzeugte Raum- oder Einzelsteuerungen können nicht als physische Rollläden ausgewählt werden.",
-      "global_position_order_conflict": "Die ausgewählten globalen Übertragungen würden in mindestens einem Raum die Reihenfolge Offen ≥ Vorbeugung ≥ Hitzeschutz ≥ starker Hitzeschutz verletzen. Übertrage zusätzlich die dazugehörigen Werte oder passe die Vorlage an."
+      "global_rule_no_target_rooms": "Die Zeitregel wurde nicht gespeichert, weil kein vorhandener Raum einen Rollladen konfiguriert hat. Erstelle oder konfiguriere zuerst mindestens einen Raum.",
+      "integration_cover_not_allowed": "Von Smart Shading Control erzeugte Raum- oder Einzelsteuerungen können nicht als physische Rollläden ausgewählt werden."
     }
   },
   "options": {
@@ -299,16 +297,11 @@
           "heat_temperature": "Temperatur für Hitzeschutz",
           "strong_heat_temperature": "Temperatur für starken Hitzeschutz",
           "forecast_threshold": "Schwelle der Außentemperaturprognose",
-          "window_safe_position": "Sicherheitsposition bei geöffnetem Kontakt",
-          "tilted_min_position": "Mindestöffnung bei gekipptem Kontakt",
           "min_position_change": "Mindeständerung der Position",
           "min_move_interval": "Mindestabstand zwischen automatischen Fahrten",
           "manual_override_minutes": "Dauer der manuellen Übersteuerung (spätestens bis Tageswechsel)",
           "risk_hysteresis": "Hysterese des Hitzerisikos",
-          "failsafe_profile": "Fail-safe-Profil bei unbekanntem Kontakt",
-          "failsafe_position": "Fail-safe-Sicherheitsposition",
           "dry_run": "Testmodus ohne Fahrbefehle",
-          "persist_manual_overrides": "Manuelle Übersteuerungen über Neustarts speichern",
           "tilt_control_enabled": "Lamellensteuerung aktivieren"
         },
         "data_description": {
@@ -426,49 +419,19 @@
         "title": "Globale Positionswerte für alle Räume",
         "description": "Beim Speichern werden sämtliche Positionswerte in alle vorhandenen Räume geschrieben und ersetzen dort die bisherigen Raumwerte. Danach kann jeder Raum wieder individuell angepasst werden. Ein späteres erneutes Speichern überschreibt die Positionswerte in allen Räumen erneut.",
         "data": {
-          "transfer_all_positions": "Alle Positionswerte in alle Räume übertragen",
           "open_position": "Offenposition",
-          "transfer_open_position": "Offenposition in alle Räume übertragen",
           "time_rule_close_position": "Schließposition für Zeitregeln / Nachtschließung",
-          "transfer_time_rule_close_position": "Schließposition für Zeitregeln / Nachtschließung in alle Räume übertragen",
           "preventive_position": "Position für vorbeugende Verschattung",
-          "transfer_preventive_position": "Position für vorbeugende Verschattung in alle Räume übertragen",
           "heat_position": "Hitzeschutzposition",
-          "transfer_heat_position": "Hitzeschutzposition in alle Räume übertragen",
           "strong_heat_position": "Position für starken Hitzeschutz",
-          "transfer_strong_heat_position": "Position für starken Hitzeschutz in alle Räume übertragen",
           "wind_safe_position": "Sicherheitsposition bei Wind",
-          "transfer_wind_safe_position": "Sicherheitsposition bei Wind in alle Räume übertragen",
           "storm_safe_position": "Sicherheitsposition bei Sturm",
-          "transfer_storm_safe_position": "Sicherheitsposition bei Sturm in alle Räume übertragen",
           "rain_safe_position": "Sicherheitsposition bei Regen",
-          "transfer_rain_safe_position": "Sicherheitsposition bei Regen in alle Räume übertragen",
           "frost_safe_position": "Sicherheitsposition bei Frost",
-          "transfer_frost_safe_position": "Sicherheitsposition bei Frost in alle Räume übertragen",
           "tilt_default_position": "Standard-Lamellenposition",
-          "transfer_tilt_default_position": "Standard-Lamellenposition in alle Räume übertragen",
           "tilt_heat_position": "Lamellenposition bei Hitzeschutz",
-          "transfer_tilt_heat_position": "Lamellenposition bei Hitzeschutz in alle Räume übertragen",
           "tilt_strong_heat_position": "Lamellenposition bei starkem Hitzeschutz",
-          "transfer_tilt_strong_heat_position": "Lamellenposition bei starkem Hitzeschutz in alle Räume übertragen",
-          "tilt_safety_position": "Lamellenposition bei Sicherheitsfahrt",
-          "transfer_tilt_safety_position": "Lamellenposition bei Sicherheitsfahrt in alle Räume übertragen"
-        },
-        "data_description": {
-          "transfer_all_positions": "Aktiviert: Beim Speichern werden sämtliche festgelegten Positionswerte in jeden vorhandenen Raum kopiert.",
-          "transfer_open_position": "Aktiviert: Dieser einzelne Wert wird beim Speichern in jeden vorhandenen Raum kopiert. Danach kann er dort wieder geändert werden.",
-          "transfer_time_rule_close_position": "Aktiviert: Dieser einzelne Wert wird beim Speichern in jeden vorhandenen Raum kopiert. Danach kann er dort wieder geändert werden.",
-          "transfer_preventive_position": "Aktiviert: Dieser einzelne Wert wird beim Speichern in jeden vorhandenen Raum kopiert. Danach kann er dort wieder geändert werden.",
-          "transfer_heat_position": "Aktiviert: Dieser einzelne Wert wird beim Speichern in jeden vorhandenen Raum kopiert. Danach kann er dort wieder geändert werden.",
-          "transfer_strong_heat_position": "Aktiviert: Dieser einzelne Wert wird beim Speichern in jeden vorhandenen Raum kopiert. Danach kann er dort wieder geändert werden.",
-          "transfer_wind_safe_position": "Aktiviert: Dieser einzelne Wert wird beim Speichern in jeden vorhandenen Raum kopiert. Danach kann er dort wieder geändert werden.",
-          "transfer_storm_safe_position": "Aktiviert: Dieser einzelne Wert wird beim Speichern in jeden vorhandenen Raum kopiert. Danach kann er dort wieder geändert werden.",
-          "transfer_rain_safe_position": "Aktiviert: Dieser einzelne Wert wird beim Speichern in jeden vorhandenen Raum kopiert. Danach kann er dort wieder geändert werden.",
-          "transfer_frost_safe_position": "Aktiviert: Dieser einzelne Wert wird beim Speichern in jeden vorhandenen Raum kopiert. Danach kann er dort wieder geändert werden.",
-          "transfer_tilt_default_position": "Aktiviert: Dieser einzelne Wert wird beim Speichern in jeden vorhandenen Raum kopiert. Danach kann er dort wieder geändert werden.",
-          "transfer_tilt_heat_position": "Aktiviert: Dieser einzelne Wert wird beim Speichern in jeden vorhandenen Raum kopiert. Danach kann er dort wieder geändert werden.",
-          "transfer_tilt_strong_heat_position": "Aktiviert: Dieser einzelne Wert wird beim Speichern in jeden vorhandenen Raum kopiert. Danach kann er dort wieder geändert werden.",
-          "transfer_tilt_safety_position": "Aktiviert: Dieser einzelne Wert wird beim Speichern in jeden vorhandenen Raum kopiert. Danach kann er dort wieder geändert werden."
+          "tilt_safety_position": "Lamellenposition bei Sicherheitsfahrt"
         }
       },
       "positions": {
@@ -524,8 +487,8 @@
       "rule_no_weekdays": "Wähle mindestens einen Wochentag aus.",
       "rule_conflict_opposite_action": "Für dieselben Rollläden existiert zur gleichen Zeit bereits eine gegensätzliche Fahraktion.",
       "rule_conflict_duplicate": "Eine inhaltlich identische Zeitregel existiert bereits.",
-      "integration_cover_not_allowed": "Von Smart Shading Control erzeugte Raum- oder Einzelsteuerungen können nicht als physische Rollläden ausgewählt werden.",
-      "global_position_order_conflict": "Die ausgewählten globalen Übertragungen würden in mindestens einem Raum die Reihenfolge Offen ≥ Vorbeugung ≥ Hitzeschutz ≥ starker Hitzeschutz verletzen. Übertrage zusätzlich die dazugehörigen Werte oder passe die Vorlage an."
+      "global_rule_no_target_rooms": "Die Zeitregel wurde nicht gespeichert, weil kein vorhandener Raum einen Rollladen konfiguriert hat. Erstelle oder konfiguriere zuerst mindestens einen Raum.",
+      "integration_cover_not_allowed": "Von Smart Shading Control erzeugte Raum- oder Einzelsteuerungen können nicht als physische Rollläden ausgewählt werden."
     }
   },
   "selector": {
@@ -541,14 +504,6 @@
         "any_day": "Unabhängig von Arbeitstag/Feiertag",
         "workday": "Nur Arbeitstage",
         "non_workday": "Nur freie Tage und Feiertage"
-      }
-    },
-    "failsafe_profile": {
-      "options": {
-        "block": "Nur blockieren",
-        "stop": "Stoppen und blockieren",
-        "open": "Stoppen und vollständig öffnen",
-        "safe_position": "Stoppen und Sicherheitsposition anfahren"
       }
     },
     "frost_action": {
@@ -590,8 +545,6 @@
           "disabled": "Deaktiviert",
           "paused": "Pausiert",
           "contact_protection": "Kontaktschutz",
-          "tilted_limit": "Kippschutz",
-          "contact_unknown": "Kontaktzustand unbekannt",
           "frost_block": "Frostsperre",
           "manual_override": "Manuell übersteuert",
           "schedule": "Zeitregel",
@@ -601,7 +554,6 @@
           "solar_gain": "Solargewinn",
           "normal": "Normal",
           "unavailable": "Nicht verfügbar",
-          "failsafe": "Fail-safe aktiv",
           "frost_protection": "Frostschutz",
           "rain_protection": "Regenschutz",
           "wind_protection": "Windschutz",
@@ -625,12 +577,6 @@
           "mode_open": "Betriebsmodus Offen",
           "mode_closed": "Betriebsmodus Geschlossen",
           "mode_heat_protection": "Betriebsmodus Hitzeschutz",
-          "contact_closing_protection": "Schließschutz durch Kontakt aktiv",
-          "contact_tilted_safety": "Kippschutz aktiv",
-          "contact_unknown_block": "Unbekannter Kontakt – Bewegung blockiert",
-          "contact_unknown_stop": "Unbekannter Kontakt – Bewegung gestoppt",
-          "contact_unknown_open": "Unbekannter Kontakt – vollständig geöffnet",
-          "contact_unknown_safe_position": "Unbekannter Kontakt – Sicherheitsposition",
           "all_manual_override": "Alle betroffenen Rollläden manuell übersteuert",
           "storm_protection": "Sturmschutz aktiv",
           "wind_protection": "Windschutz aktiv",
@@ -644,6 +590,7 @@
           "dynamic_normal": "Dynamik: keine Verschattung erforderlich",
           "time_rule_event": "Zeitregel ausgelöst",
           "time_rule_open_retry": "Zeitregel-Öffnung wird erneut versucht",
+          "time_rule_open_skipped_heat_protection": "Zeitregel-Öffnung wegen aktivem Hitzeschutz übersprungen",
           "time_rule_closed": "Zeitgesteuert geschlossen",
           "time_rule_close_blocked_contact": "Nachtabsenkung durch geöffneten Kontakt blockiert",
           "time_rule_close_contact_delay": "Nachtabsenkung wartet nach Kontaktschließung"
@@ -659,12 +606,6 @@
           "mode_open": "Betriebsmodus Offen",
           "mode_closed": "Betriebsmodus Geschlossen",
           "mode_heat_protection": "Betriebsmodus Hitzeschutz",
-          "contact_closing_protection": "Schließschutz durch Kontakt aktiv",
-          "contact_tilted_safety": "Kippschutz aktiv",
-          "contact_unknown_block": "Unbekannter Kontakt – Bewegung blockiert",
-          "contact_unknown_stop": "Unbekannter Kontakt – Bewegung gestoppt",
-          "contact_unknown_open": "Unbekannter Kontakt – vollständig geöffnet",
-          "contact_unknown_safe_position": "Unbekannter Kontakt – Sicherheitsposition",
           "all_manual_override": "Alle betroffenen Rollläden manuell übersteuert",
           "storm_protection": "Sturmschutz aktiv",
           "wind_protection": "Windschutz aktiv",
@@ -678,6 +619,7 @@
           "dynamic_normal": "Dynamik: keine Verschattung erforderlich",
           "time_rule_event": "Zeitregel ausgelöst",
           "time_rule_open_retry": "Zeitregel-Öffnung wird erneut versucht",
+          "time_rule_open_skipped_heat_protection": "Zeitregel-Öffnung wegen aktivem Hitzeschutz übersprungen",
           "time_rule_closed": "Zeitgesteuert geschlossen",
           "time_rule_close_blocked_contact": "Nachtabsenkung durch geöffneten Kontakt blockiert",
           "time_rule_close_contact_delay": "Nachtabsenkung wartet nach Kontaktschließung"
@@ -811,7 +753,7 @@
   "issues": {
     "contact_unknown": {
       "title": "Kontaktzustand unbekannt",
-      "description": "Der Kontakt {entity} im Raum {room} ist nicht verfügbar oder unbekannt. Die konfigurierte Fail-safe-Strategie ist aktiv."
+      "description": "Der Kontakt {entity} im Raum {room} ist nicht verfügbar oder unbekannt. Das automatische Schließen durch eine Zeitregel bleibt blockiert, bis der Kontakt wieder einen zuverlässigen Zustand meldet."
     },
     "cover_stop_unsupported": {
       "title": "Notstopp nicht unterstützt",

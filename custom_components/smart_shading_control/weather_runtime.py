@@ -6,7 +6,11 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Any
 
-from homeassistant.const import ATTR_UNIT_OF_MEASUREMENT, STATE_UNAVAILABLE, STATE_UNKNOWN
+from homeassistant.const import (
+    ATTR_UNIT_OF_MEASUREMENT,
+    STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
+)
 from homeassistant.core import HomeAssistant
 
 from .const import (
@@ -37,9 +41,15 @@ from .const import (
     STATUS_WIND_PROTECTION,
 )
 from .logic import clamp, weather_factor
+from .runtime_state import parse_utc_timestamp
 from .schedule import normalize_boolean
 from .state_helpers import attribute_float, temperature_state, temperature_to_celsius
-from .units import normalize_illuminance, normalize_irradiance, normalize_wind_speed, rain_is_active
+from .units import (
+    normalize_illuminance,
+    normalize_irradiance,
+    normalize_wind_speed,
+    rain_is_active,
+)
 
 ConfigProvider = Callable[[], dict[str, Any]]
 
@@ -57,6 +67,57 @@ class WeatherRuntime:
     @property
     def config(self) -> dict[str, Any]:
         return self._config_provider()
+
+    def storage_state(self) -> dict[str, Any]:
+        """Return absolute protection timers for restart-safe persistence."""
+        return {
+            "active": self.active_protection,
+            "seen_since": {
+                kind: timestamp.isoformat()
+                for kind, timestamp in self._protection_seen_since.items()
+            },
+            "clear_since": {
+                kind: timestamp.isoformat()
+                for kind, timestamp in self._protection_clear_since.items()
+            },
+        }
+
+    def restore_storage_state(self, raw: Any, *, now: datetime) -> None:
+        """Restore protection timers without restarting their configured delays."""
+        self._protection_seen_since = {}
+        self._protection_clear_since = {}
+        self.active_protection = None
+        if not isinstance(raw, dict):
+            return
+
+        kinds = {"storm", "wind", "rain", "frost"}
+        for field, target in (
+            ("seen_since", self._protection_seen_since),
+            ("clear_since", self._protection_clear_since),
+        ):
+            values = raw.get(field)
+            if not isinstance(values, dict):
+                continue
+            for raw_kind, raw_timestamp in values.items():
+                kind = str(raw_kind)
+                if kind not in kinds:
+                    continue
+                timestamp = parse_utc_timestamp(raw_timestamp)
+                # A future start timestamp cannot describe elapsed protection
+                # time and is treated as corrupt rather than extending a delay.
+                if timestamp is not None and timestamp <= now:
+                    target[kind] = timestamp
+
+        active = str(raw.get("active") or "")
+        # A regular active protection always has either its activation marker
+        # or an in-progress release marker.  Restoring only the bare enum from
+        # a truncated/corrupt Store would otherwise hold that protection
+        # forever while the corresponding input remains unknown.
+        if active in kinds and (
+            active in self._protection_seen_since
+            or active in self._protection_clear_since
+        ):
+            self.active_protection = active
 
     def radiation_factor(self) -> tuple[str | None, float]:
         config = self.config
@@ -189,9 +250,20 @@ class WeatherRuntime:
                     matured.add(kind)
             elif active is False:
                 self._protection_seen_since.pop(kind, None)
-                self._protection_clear_since.setdefault(kind, now)
+                if self.active_protection == kind:
+                    self._protection_clear_since.setdefault(kind, now)
+                else:
+                    # Release timing is meaningful only for the protection that
+                    # is actually active. Keeping timestamps for every disabled
+                    # input caused needless persistent-state churn.
+                    self._protection_clear_since.pop(kind, None)
             else:
                 self._protection_clear_since.pop(kind, None)
+                # Unknown input must not count as continuous evidence toward a
+                # new activation. An already active protection is retained
+                # conservatively by the hold logic below.
+                if self.active_protection != kind:
+                    self._protection_seen_since.pop(kind, None)
 
         priority = ("storm", "wind", "rain", "frost")
         selected = next((kind for kind in priority if kind in matured), None)

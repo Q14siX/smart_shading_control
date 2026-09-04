@@ -70,16 +70,11 @@
           "heat_temperature": "Heat protection temperature",
           "strong_heat_temperature": "Strong heat protection temperature",
           "forecast_threshold": "Outdoor forecast threshold",
-          "window_safe_position": "Safety position for an open contact",
-          "tilted_min_position": "Minimum opening for a tilted contact",
           "min_position_change": "Minimum position change",
           "min_move_interval": "Minimum interval between automatic movements",
           "manual_override_minutes": "Manual override duration (no later than the next day change)",
           "risk_hysteresis": "Heat risk hysteresis",
-          "failsafe_profile": "Fail-safe profile for unknown contact",
-          "failsafe_position": "Fail-safe safety position",
           "dry_run": "Dry run without cover commands",
-          "persist_manual_overrides": "Keep manual overrides across restarts",
           "tilt_control_enabled": "Enable slat tilt control"
         },
         "data_description": {
@@ -185,6 +180,9 @@
         }
       }
     },
+    "abort": {
+      "already_configured": "This central configuration already exists."
+    },
     "error": {
       "no_covers": "Select at least one cover.",
       "duplicate_cover": "A cover was assigned to more than one building side.",
@@ -204,8 +202,8 @@
       "rule_no_weekdays": "Select at least one weekday.",
       "rule_conflict_opposite_action": "An opposite movement action already exists for the same covers at the same time.",
       "rule_conflict_duplicate": "An identical time rule already exists.",
-      "integration_cover_not_allowed": "Room or individual controls created by Smart Shading Control cannot be selected as physical covers.",
-      "global_position_order_conflict": "The selected global transfers would violate open ≥ preventive ≥ heat protection ≥ strong heat protection in at least one room. Transfer the related values as well or adjust the template."
+      "global_rule_no_target_rooms": "The time rule was not saved because no existing room has a configured cover. Create or configure at least one room first.",
+      "integration_cover_not_allowed": "Room or individual controls created by Smart Shading Control cannot be selected as physical covers."
     }
   },
   "options": {
@@ -299,16 +297,11 @@
           "heat_temperature": "Heat protection temperature",
           "strong_heat_temperature": "Strong heat protection temperature",
           "forecast_threshold": "Outdoor forecast threshold",
-          "window_safe_position": "Safety position for an open contact",
-          "tilted_min_position": "Minimum opening for a tilted contact",
           "min_position_change": "Minimum position change",
           "min_move_interval": "Minimum interval between automatic movements",
           "manual_override_minutes": "Manual override duration (no later than the next day change)",
           "risk_hysteresis": "Heat risk hysteresis",
-          "failsafe_profile": "Fail-safe profile for unknown contact",
-          "failsafe_position": "Fail-safe safety position",
           "dry_run": "Dry run without cover commands",
-          "persist_manual_overrides": "Keep manual overrides across restarts",
           "tilt_control_enabled": "Enable slat tilt control"
         },
         "data_description": {
@@ -426,49 +419,19 @@
         "title": "Global position values for all rooms",
         "description": "Saving writes every position value to every existing room and replaces its previous room values. Each room can then be customized again. Saving here again later overwrites the position values in all rooms again.",
         "data": {
-          "transfer_all_positions": "Transfer all position values to every room",
           "open_position": "Open position",
-          "transfer_open_position": "Transfer open position to every room",
           "time_rule_close_position": "Time-rule / night-closing position",
-          "transfer_time_rule_close_position": "Transfer time-rule / night-closing position to every room",
           "preventive_position": "Preventive shading position",
-          "transfer_preventive_position": "Transfer preventive shading position to every room",
           "heat_position": "Heat protection position",
-          "transfer_heat_position": "Transfer heat protection position to every room",
           "strong_heat_position": "Strong heat protection position",
-          "transfer_strong_heat_position": "Transfer strong heat protection position to every room",
           "wind_safe_position": "Wind safety position",
-          "transfer_wind_safe_position": "Transfer wind safety position to every room",
           "storm_safe_position": "Storm safety position",
-          "transfer_storm_safe_position": "Transfer storm safety position to every room",
           "rain_safe_position": "Rain safety position",
-          "transfer_rain_safe_position": "Transfer rain safety position to every room",
           "frost_safe_position": "Frost safety position",
-          "transfer_frost_safe_position": "Transfer frost safety position to every room",
           "tilt_default_position": "Default tilt position",
-          "transfer_tilt_default_position": "Transfer default tilt position to every room",
           "tilt_heat_position": "Heat-protection tilt position",
-          "transfer_tilt_heat_position": "Transfer heat-protection tilt position to every room",
           "tilt_strong_heat_position": "Strong-heat tilt position",
-          "transfer_tilt_strong_heat_position": "Transfer strong-heat tilt position to every room",
-          "tilt_safety_position": "Safety tilt position",
-          "transfer_tilt_safety_position": "Transfer safety tilt position to every room"
-        },
-        "data_description": {
-          "transfer_all_positions": "Enabled: Saving copies every defined position value into every existing room.",
-          "transfer_open_position": "Enabled: Saving copies this single value into every existing room. It can then be changed again in each room.",
-          "transfer_time_rule_close_position": "Enabled: Saving copies this single value into every existing room. It can then be changed again in each room.",
-          "transfer_preventive_position": "Enabled: Saving copies this single value into every existing room. It can then be changed again in each room.",
-          "transfer_heat_position": "Enabled: Saving copies this single value into every existing room. It can then be changed again in each room.",
-          "transfer_strong_heat_position": "Enabled: Saving copies this single value into every existing room. It can then be changed again in each room.",
-          "transfer_wind_safe_position": "Enabled: Saving copies this single value into every existing room. It can then be changed again in each room.",
-          "transfer_storm_safe_position": "Enabled: Saving copies this single value into every existing room. It can then be changed again in each room.",
-          "transfer_rain_safe_position": "Enabled: Saving copies this single value into every existing room. It can then be changed again in each room.",
-          "transfer_frost_safe_position": "Enabled: Saving copies this single value into every existing room. It can then be changed again in each room.",
-          "transfer_tilt_default_position": "Enabled: Saving copies this single value into every existing room. It can then be changed again in each room.",
-          "transfer_tilt_heat_position": "Enabled: Saving copies this single value into every existing room. It can then be changed again in each room.",
-          "transfer_tilt_strong_heat_position": "Enabled: Saving copies this single value into every existing room. It can then be changed again in each room.",
-          "transfer_tilt_safety_position": "Enabled: Saving copies this single value into every existing room. It can then be changed again in each room."
+          "tilt_safety_position": "Safety tilt position"
         }
       },
       "positions": {
@@ -524,8 +487,8 @@
       "rule_no_weekdays": "Select at least one weekday.",
       "rule_conflict_opposite_action": "An opposite movement action already exists for the same covers at the same time.",
       "rule_conflict_duplicate": "An identical time rule already exists.",
-      "integration_cover_not_allowed": "Room or individual controls created by Smart Shading Control cannot be selected as physical covers.",
-      "global_position_order_conflict": "The selected global transfers would violate open ≥ preventive ≥ heat protection ≥ strong heat protection in at least one room. Transfer the related values as well or adjust the template."
+      "global_rule_no_target_rooms": "The time rule was not saved because no existing room has a configured cover. Create or configure at least one room first.",
+      "integration_cover_not_allowed": "Room or individual controls created by Smart Shading Control cannot be selected as physical covers."
     }
   },
   "selector": {
@@ -541,14 +504,6 @@
         "any_day": "Independent of workday/holiday",
         "workday": "Workdays only",
         "non_workday": "Days off and public holidays only"
-      }
-    },
-    "failsafe_profile": {
-      "options": {
-        "block": "Block only",
-        "stop": "Stop and block",
-        "open": "Stop and fully open",
-        "safe_position": "Stop and move to safety position"
       }
     },
     "frost_action": {
@@ -590,8 +545,6 @@
           "disabled": "Disabled",
           "paused": "Paused",
           "contact_protection": "Contact protection",
-          "tilted_limit": "Tilt protection",
-          "contact_unknown": "Contact state unknown",
           "frost_block": "Frost lock",
           "manual_override": "Manual override",
           "schedule": "Time rule",
@@ -601,7 +554,6 @@
           "solar_gain": "Solar gain",
           "normal": "Normal",
           "unavailable": "Unavailable",
-          "failsafe": "Fail-safe active",
           "frost_protection": "Frost protection",
           "rain_protection": "Rain protection",
           "wind_protection": "Wind protection",
@@ -625,12 +577,6 @@
           "mode_open": "Open mode",
           "mode_closed": "Closed mode",
           "mode_heat_protection": "Heat-protection mode",
-          "contact_closing_protection": "Closing protection by contact active",
-          "contact_tilted_safety": "Tilted-contact safety active",
-          "contact_unknown_block": "Unknown contact – movement blocked",
-          "contact_unknown_stop": "Unknown contact – movement stopped",
-          "contact_unknown_open": "Unknown contact – fully opened",
-          "contact_unknown_safe_position": "Unknown contact – safety position",
           "all_manual_override": "All affected covers manually overridden",
           "storm_protection": "Storm protection active",
           "wind_protection": "Wind protection active",
@@ -644,6 +590,7 @@
           "dynamic_normal": "Dynamic: no shading required",
           "time_rule_event": "Time rule triggered",
           "time_rule_open_retry": "Scheduled opening is being retried",
+          "time_rule_open_skipped_heat_protection": "Scheduled opening skipped due to active heat protection",
           "time_rule_closed": "Closed by time rule",
           "time_rule_close_blocked_contact": "Night closing blocked by open contact",
           "time_rule_close_contact_delay": "Night closing waiting after contact closed"
@@ -659,12 +606,6 @@
           "mode_open": "Open mode",
           "mode_closed": "Closed mode",
           "mode_heat_protection": "Heat-protection mode",
-          "contact_closing_protection": "Closing protection by contact active",
-          "contact_tilted_safety": "Tilted-contact safety active",
-          "contact_unknown_block": "Unknown contact – movement blocked",
-          "contact_unknown_stop": "Unknown contact – movement stopped",
-          "contact_unknown_open": "Unknown contact – fully opened",
-          "contact_unknown_safe_position": "Unknown contact – safety position",
           "all_manual_override": "All affected covers manually overridden",
           "storm_protection": "Storm protection active",
           "wind_protection": "Wind protection active",
@@ -678,6 +619,7 @@
           "dynamic_normal": "Dynamic: no shading required",
           "time_rule_event": "Time rule triggered",
           "time_rule_open_retry": "Scheduled opening is being retried",
+          "time_rule_open_skipped_heat_protection": "Scheduled opening skipped due to active heat protection",
           "time_rule_closed": "Closed by time rule",
           "time_rule_close_blocked_contact": "Night closing blocked by open contact",
           "time_rule_close_contact_delay": "Night closing waiting after contact closed"
@@ -811,7 +753,7 @@
   "issues": {
     "contact_unknown": {
       "title": "Contact state unknown",
-      "description": "Contact {entity} in room {room} is unavailable or unknown. The configured fail-safe strategy is active."
+      "description": "Contact {entity} in room {room} is unavailable or unknown. Automatic closing by time rule remains blocked until the contact reports a reliable state again."
     },
     "cover_stop_unsupported": {
       "title": "Emergency stop unsupported",

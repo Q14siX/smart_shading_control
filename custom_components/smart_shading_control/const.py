@@ -6,7 +6,7 @@ from typing import Final
 
 DOMAIN: Final = "smart_shading_control"
 NAME: Final = "Smart Shading Control"
-VERSION: Final = "20260903.085028"
+VERSION: Final = "20260904.091706"
 
 PLATFORMS: Final = ["sensor", "binary_sensor", "switch", "select", "button", "cover"]
 
@@ -60,12 +60,6 @@ CONF_COVERS_NORTH: Final = "covers_north"
 CONF_COVERS_EAST: Final = "covers_east"
 CONF_COVERS_SOUTH: Final = "covers_south"
 CONF_COVERS_WEST: Final = "covers_west"
-ORIENTATION_KEYS: Final = {
-    "north": CONF_COVERS_NORTH,
-    "east": CONF_COVERS_EAST,
-    "south": CONF_COVERS_SOUTH,
-    "west": CONF_COVERS_WEST,
-}
 
 # One optional opening contact may be assigned to every configured cover.
 CONF_COVER_CONTACTS: Final = "cover_contacts"
@@ -89,14 +83,10 @@ CONF_PREVENTIVE_POSITION: Final = "preventive_position"
 CONF_HEAT_POSITION: Final = "heat_position"
 CONF_STRONG_HEAT_POSITION: Final = "strong_heat_position"
 CONF_TIME_RULE_CLOSE_POSITION: Final = "time_rule_close_position"
-CONF_WINDOW_SAFE_POSITION: Final = "window_safe_position"
-CONF_TILTED_MIN_POSITION: Final = "tilted_min_position"
 CONF_MIN_POSITION_CHANGE: Final = "min_position_change"
 CONF_MIN_MOVE_INTERVAL: Final = "min_move_interval"
 CONF_MANUAL_OVERRIDE_MINUTES: Final = "manual_override_minutes"
 CONF_RISK_HYSTERESIS: Final = "risk_hysteresis"
-CONF_FAILSAFE_PROFILE: Final = "failsafe_profile"
-CONF_FAILSAFE_POSITION: Final = "failsafe_position"
 CONF_DRY_RUN: Final = "dry_run"
 CONF_PERSIST_MANUAL_OVERRIDES: Final = "persist_manual_overrides"
 CONF_TILT_CONTROL_ENABLED: Final = "tilt_control_enabled"
@@ -110,7 +100,6 @@ CONF_TILT_SAFETY_POSITION: Final = "tilt_safety_position"
 CONF_GLOBAL_POSITION_VALUES: Final = "global_position_values"
 CONF_GLOBAL_MANUAL_OVERRIDE_MINUTES: Final = "global_manual_override_minutes"
 CONF_GLOBAL_POSITION_OVERRIDES: Final = "global_position_overrides"
-CONF_TRANSFER_ALL_POSITIONS: Final = "transfer_all_positions"
 
 # Event-based time rules. Each rule performs exactly one opening or closing
 # action at one fixed time or solar event. The legacy interval keys are retained
@@ -236,18 +225,13 @@ ROOM_DEFAULTS: Final = {
     CONF_STORM_SAFE_POSITION: 100,
     CONF_RAIN_SAFE_POSITION: 100,
     CONF_FROST_SAFE_POSITION: 100,
-    CONF_WINDOW_SAFE_POSITION: 100,
-    CONF_TILTED_MIN_POSITION: 35,
     CONF_MIN_POSITION_CHANGE: 8,
     CONF_MIN_MOVE_INTERVAL: 10,
     CONF_MANUAL_OVERRIDE_MINUTES: 240,
     CONF_RISK_HYSTERESIS: 5,
     CONF_COVER_CONTACTS: {},
     CONF_TIME_RULES: [],
-    CONF_FAILSAFE_PROFILE: "block",
-    CONF_FAILSAFE_POSITION: 100,
     CONF_DRY_RUN: False,
-    CONF_PERSIST_MANUAL_OVERRIDES: False,
     CONF_TILT_CONTROL_ENABLED: False,
     CONF_TILT_DEFAULT_POSITION: 100,
     CONF_TILT_HEAT_POSITION: 50,
@@ -263,14 +247,6 @@ MODE_HEAT_PROTECTION: Final = "heat_protection"
 MODE_OPEN: Final = "open"
 MODE_CLOSED: Final = "closed"
 MODE_PAUSE: Final = "pause"
-
-FAILSAFE_BLOCK: Final = "block"
-FAILSAFE_STOP: Final = "stop"
-FAILSAFE_OPEN: Final = "open"
-FAILSAFE_SAFE_POSITION: Final = "safe_position"
-FAILSAFE_PROFILES: Final = [
-    FAILSAFE_BLOCK, FAILSAFE_STOP, FAILSAFE_OPEN, FAILSAFE_SAFE_POSITION
-]
 
 FROST_ACTION_BLOCK: Final = "block"
 FROST_ACTION_SAFE_POSITION: Final = "safe_position"
@@ -297,14 +273,11 @@ MODES: Final = [
 STATUS_DISABLED: Final = "disabled"
 STATUS_PAUSED: Final = "paused"
 STATUS_CONTACT_PROTECTION: Final = "contact_protection"
-STATUS_TILTED_LIMIT: Final = "tilted_limit"
-STATUS_CONTACT_UNKNOWN: Final = "contact_unknown"
 STATUS_FROST_BLOCK: Final = "frost_block"
 STATUS_FROST_PROTECTION: Final = "frost_protection"
 STATUS_RAIN_PROTECTION: Final = "rain_protection"
 STATUS_WIND_PROTECTION: Final = "wind_protection"
 STATUS_STORM_PROTECTION: Final = "storm_protection"
-STATUS_FAILSAFE: Final = "failsafe"
 STATUS_DRY_RUN: Final = "dry_run"
 STATUS_MANUAL_OVERRIDE: Final = "manual_override"
 STATUS_SCHEDULE: Final = "schedule"

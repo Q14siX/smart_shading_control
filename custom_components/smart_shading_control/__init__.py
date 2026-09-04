@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import logging
 from typing import Any
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryError
+from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
+from homeassistant.core import CoreState, Event, HomeAssistant, valid_entity_id
+from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers.event import async_track_entity_registry_updated_event
 from homeassistant.helpers.storage import Store
 
+from .command_queue import async_shutdown_command_queue
 from .const import (
     CONF_AZIMUTH_EAST,
     CONF_AZIMUTH_NORTH,
@@ -23,13 +27,12 @@ from .const import (
     CONF_COVERS_SOUTH,
     CONF_COVERS_WEST,
     CONF_ENTRY_TYPE,
-    CONF_GLOBAL_TIME_RULES,
-    CONF_GLOBAL_POSITION_VALUES,
     CONF_GLOBAL_MANUAL_OVERRIDE_MINUTES,
     CONF_GLOBAL_POSITION_OVERRIDES,
-    CONF_OPENING_CONTACTS,
-    CONF_TIME_RULE_CLOSE_POSITION,
+    CONF_GLOBAL_POSITION_VALUES,
+    CONF_GLOBAL_TIME_RULES,
     CONF_MANUAL_OVERRIDE_MINUTES,
+    CONF_OPENING_CONTACTS,
     CONF_PERSIST_MANUAL_OVERRIDES,
     CONF_RULE_ACTION,
     CONF_RULE_COVERS,
@@ -54,6 +57,7 @@ from .const import (
     CONF_RULE_TRIGGER_REFERENCE,
     CONF_RULE_TUESDAY,
     CONF_RULE_WEDNESDAY,
+    CONF_TIME_RULE_CLOSE_POSITION,
     CONF_TIME_RULES,
     DOMAIN,
     ENTRY_TYPE_GLOBAL,
@@ -78,15 +82,31 @@ from .const import (
     TIME_REFERENCE_SUNSET,
 )
 from .controller import SmartShadingController
-from .command_queue import async_shutdown_command_queue
-from .coordinator import async_get_or_create_coordinator
+from .coordinator import (
+    COORDINATOR_KEY,
+    SmartShadingDataCoordinator,
+    async_get_or_create_coordinator,
+)
+from .entity_references import (
+    PENDING_ENTITY_RENAMES_KEY,
+    apply_pending_config_entity_renames,
+    apply_pending_entity_renames,
+    iter_config_entity_id_candidates,
+    normalize_pending_entity_renames,
+)
+from .global_repairs import update_global_repairs
+from .global_transfers import (
+    migrate_global_time_rules_to_rooms,
+    schedule_room_entry_reloads,
+)
 from .issues import create_issue, delete_entry_issues, delete_issue
 from .logic import as_list
 from .schedule import normalize_boolean, normalize_rule, parse_time
+from .storage_helpers import async_load_persistent_store
 
 _LOGGER = logging.getLogger(__name__)
 
-_ENTRY_VERSION = 19
+_ENTRY_VERSION = 20
 _COVER_OWNERS_KEY = "cover_owners"
 _COVER_KEYS = (
     CONF_COVERS_NORTH,
@@ -94,11 +114,22 @@ _COVER_KEYS = (
     CONF_COVERS_SOUTH,
     CONF_COVERS_WEST,
 )
+_PERSISTENT_ROOM_STORE_SUFFIXES = ("manual_overrides", "control_state")
 _LEGACY_CONTACT_KEYS = (
     CONF_OPENING_CONTACTS,
     LEGACY_CONF_OPEN_WINDOW_SENSORS,
     LEGACY_CONF_TILTED_WINDOW_SENSORS,
     LEGACY_CONF_DOOR_SENSORS,
+)
+_GLOBAL_TRANSFER_ONLY_KEYS = frozenset(
+    {
+        CONF_GLOBAL_MANUAL_OVERRIDE_MINUTES,
+        CONF_GLOBAL_POSITION_OVERRIDES,
+        CONF_GLOBAL_POSITION_VALUES,
+        CONF_GLOBAL_TIME_RULES,
+        CONF_TIME_RULES,
+        PENDING_ENTITY_RENAMES_KEY,
+    }
 )
 
 
@@ -114,6 +145,7 @@ def global_entry(hass: HomeAssistant) -> ConfigEntry | None:
             item
             for item in hass.config_entries.async_entries(DOMAIN)
             if entry_type(item) == ENTRY_TYPE_GLOBAL
+            and item.disabled_by is None
         ),
         None,
     )
@@ -245,23 +277,54 @@ def _normalize_rules(
     *,
     scope: str,
     covers: list[str] | None = None,
+    id_namespace: str | None = None,
+    preserve_disabled: bool = False,
+    invalid_rules: list[Any] | None = None,
 ) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
+    if raw_rules is not None and not isinstance(
+        raw_rules,
+        (dict, list, set, str, tuple),
+    ):
+        if invalid_rules is not None:
+            invalid_rules.append(raw_rules)
+        return result
     available = set(covers or [])
     used_ids: set[str] = set()
-    for raw_rule in as_list(raw_rules):
-        if not isinstance(raw_rule, dict) or not normalize_boolean(
-            raw_rule.get(CONF_RULE_ENABLED), True
-        ):
+    for source_index, raw_rule in enumerate(as_list(raw_rules), start=1):
+        if not isinstance(raw_rule, dict):
+            if invalid_rules is not None:
+                invalid_rules.append(raw_rule)
             continue
-        for expanded in _expand_rule(raw_rule):
+
+        enabled = normalize_boolean(raw_rule.get(CONF_RULE_ENABLED), True)
+        if not enabled and not preserve_disabled:
+            continue
+
+        source = dict(raw_rule)
+        if id_namespace and not str(source.get(CONF_RULE_ID) or "").strip():
+            source[CONF_RULE_ID] = uuid5(
+                NAMESPACE_URL,
+                f"{id_namespace}:{source_index}",
+            ).hex
+
+        for expanded_index, expanded in enumerate(_expand_rule(source), start=1):
             try:
                 rule = normalize_rule(expanded)
-            except (TypeError, ValueError):
+            except (KeyError, TypeError, ValueError):
+                if invalid_rules is not None:
+                    invalid_rules.append(raw_rule)
                 continue
             rule_id = str(rule.get(CONF_RULE_ID) or "").strip()
             if not rule_id or rule_id in used_ids:
-                rule_id = uuid4().hex
+                rule_id = (
+                    uuid5(
+                        NAMESPACE_URL,
+                        f"{id_namespace}:{source_index}:{expanded_index}:{rule_id}",
+                    ).hex
+                    if id_namespace
+                    else uuid4().hex
+                )
             used_ids.add(rule_id)
             rule[CONF_RULE_ID] = rule_id
             rule[CONF_RULE_SCOPE] = scope
@@ -272,10 +335,14 @@ def _normalize_rules(
                     if cover in available
                 ]
                 if not selected:
+                    if invalid_rules is not None:
+                        invalid_rules.append(raw_rule)
                     continue
                 rule[CONF_RULE_COVERS] = selected
             else:
                 rule[CONF_RULE_COVERS] = []
+            if not enabled and preserve_disabled:
+                rule[CONF_RULE_ENABLED] = False
             result.append(rule)
     return result
 
@@ -327,23 +394,90 @@ def _central_position_values_for_migration(hass: HomeAssistant) -> dict[str, int
 
 def _transfer_legacy_global_overrides_to_rooms(
     hass: HomeAssistant, values: dict[str, int], selected_keys: set[str]
-) -> None:
+) -> list[str]:
     """Convert former continuous overrides into independent room values."""
     if not selected_keys:
-        return
+        return []
+    updated_entries: list[str] = []
     for room_entry in hass.config_entries.async_entries(DOMAIN):
         if entry_type(room_entry) != ENTRY_TYPE_ROOM:
             continue
         room_options = dict(room_entry.options)
         for key in selected_keys:
             room_options[key] = int(values[key])
-        hass.config_entries.async_update_entry(room_entry, options=room_options)
-        if room_entry.state.recoverable:
-            hass.config_entries.async_schedule_reload(room_entry.entry_id)
+        if hass.config_entries.async_update_entry(room_entry, options=room_options):
+            updated_entries.append(room_entry.entry_id)
+    return updated_entries
+
+
+def _distribute_pending_global_time_rules(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+) -> None:
+    """Retry an idempotent legacy-rule transfer without blocking entry setup.
+
+    Home Assistant treats a failed Config Entry migration as non-recoverable for
+    the rest of the running process.  A central entry therefore cannot return a
+    migration failure merely because no room (or no usable room cover) exists
+    yet.  Version 20 retains that legacy source privately and retries whenever
+    the central entry or a room is set up.  The source is removed only after
+    every existing room has an independently stored copy.
+    """
+    if entry_type(entry) != ENTRY_TYPE_GLOBAL:
+        return
+    raw_rules = _merged_value(
+        dict(entry.data),
+        dict(entry.options),
+        CONF_GLOBAL_TIME_RULES,
+        _merged_value(
+            dict(entry.data),
+            dict(entry.options),
+            CONF_TIME_RULES,
+            [],
+        ),
+    )
+    if not as_list(raw_rules):
+        return
+
+    invalid_rules: list[Any] = []
+    rules = _normalize_rules(
+        raw_rules,
+        scope=RULE_SCOPE_GLOBAL,
+        id_namespace=f"{entry.entry_id}:global",
+        preserve_disabled=True,
+        invalid_rules=invalid_rules,
+    )
+    if invalid_rules:
+        _LOGGER.error(
+            "Cannot safely distribute %s invalid retained central time rule(s) "
+            "from %s",
+            len(invalid_rules),
+            entry.title,
+        )
+        return
+
+    updated_room_ids, complete = migrate_global_time_rules_to_rooms(
+        hass,
+        entry,
+        rules,
+        schedule_reload=False,
+    )
+    if complete:
+        data = dict(entry.data)
+        options = dict(entry.options)
+        for key in (CONF_GLOBAL_TIME_RULES, CONF_TIME_RULES):
+            data.pop(key, None)
+            options.pop(key, None)
+        hass.config_entries.async_update_entry(
+            entry,
+            data=data,
+            options=options,
+        )
+    schedule_room_entry_reloads(hass, updated_room_ids)
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Migrate older entries to config-entry version 19."""
+    """Migrate older entries to config-entry version 20."""
     if entry.version > _ENTRY_VERSION:
         _LOGGER.error("Cannot migrate Smart Shading Control entry version %s", entry.version)
         return False
@@ -356,17 +490,10 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     data.setdefault(CONF_ENTRY_TYPE, ENTRY_TYPE_ROOM)
     kind = str(data[CONF_ENTRY_TYPE])
 
-    # Version 13 restored optional persistence after version 12 removed it.
-    if kind == ENTRY_TYPE_ROOM and original_version <= 12:
-        default_persist = False if original_version == 12 else True
-        persist_value = options.get(
-            CONF_PERSIST_MANUAL_OVERRIDES,
-            data.get(CONF_PERSIST_MANUAL_OVERRIDES, default_persist),
-        )
-        data.pop(CONF_PERSIST_MANUAL_OVERRIDES, None)
-        options[CONF_PERSIST_MANUAL_OVERRIDES] = normalize_boolean(
-            persist_value, default_persist
-        )
+    # Runtime persistence is no longer configurable. Removing this legacy flag
+    # must not remove either of the room's state stores.
+    data.pop(CONF_PERSIST_MANUAL_OVERRIDES, None)
+    options.pop(CONF_PERSIST_MANUAL_OVERRIDES, None)
 
     if kind == ENTRY_TYPE_GLOBAL:
         if original_version < 17:
@@ -394,21 +521,51 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             else:
                 data[CONF_AZIMUTH_NORTH] = normalized_north
 
-            raw_global_rules = _merged_value(
-                data,
-                options,
-                CONF_GLOBAL_TIME_RULES,
-                _merged_value(data, options, CONF_TIME_RULES, []),
+        raw_global_rules = _merged_value(
+            data,
+            options,
+            CONF_GLOBAL_TIME_RULES,
+            _merged_value(data, options, CONF_TIME_RULES, []),
+        )
+        invalid_global_rules: list[Any] = []
+        global_rules = _normalize_rules(
+            raw_global_rules,
+            scope=RULE_SCOPE_GLOBAL,
+            id_namespace=f"{entry.entry_id}:global",
+            preserve_disabled=True,
+            invalid_rules=invalid_global_rules,
+        )
+        if invalid_global_rules:
+            _LOGGER.error(
+                "Cannot safely migrate %s invalid central time rule(s) from %s",
+                len(invalid_global_rules),
+                entry.title,
             )
-            global_rules = _normalize_rules(
-                raw_global_rules,
-                scope=RULE_SCOPE_GLOBAL,
-            )
+            return False
+
+        updated_room_ids: set[str] = set()
+        migrated_room_ids, rules_complete = migrate_global_time_rules_to_rooms(
+            hass,
+            entry,
+            global_rules,
+            schedule_reload=False,
+        )
+        updated_room_ids.update(migrated_room_ids)
+        if not rules_complete:
+            # A failed Config Entry migration is non-recoverable during this HA
+            # process. Retain the normalized source privately in v20 instead;
+            # setup retries the idempotent room transfer when rooms become
+            # representable. The create-only UI never exposes this source as a
+            # live central rule list.
             data.pop(CONF_TIME_RULES, None)
             options.pop(CONF_TIME_RULES, None)
             data.pop(CONF_GLOBAL_TIME_RULES, None)
-            options.pop(CONF_GLOBAL_TIME_RULES, None)
             options[CONF_GLOBAL_TIME_RULES] = global_rules
+            _LOGGER.warning(
+                "Central time rules for %s were retained because they could not "
+                "yet be copied to every room",
+                entry.title,
+            )
 
         position_values = _normalized_global_position_values(data, options)
         position_overrides = _normalized_global_position_overrides(
@@ -417,10 +574,12 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             preserve_legacy=original_version < 14,
         )
         if original_version < 16:
-            _transfer_legacy_global_overrides_to_rooms(
-                hass,
-                position_values,
-                {key for key, enabled in position_overrides.items() if enabled},
+            updated_room_ids.update(
+                _transfer_legacy_global_overrides_to_rooms(
+                    hass,
+                    position_values,
+                    {key for key, enabled in position_overrides.items() if enabled},
+                )
             )
         for key in POSITION_SETTING_KEYS:
             data.pop(key, None)
@@ -430,9 +589,10 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         options.pop(CONF_GLOBAL_POSITION_OVERRIDES, None)
         options[CONF_GLOBAL_POSITION_VALUES] = position_values
 
-        if original_version < 19:
-            # Version 19 turns the global rule UI into a create-only distributor.
-            # No time rule is retained in the central Config Entry.
+        if rules_complete:
+            # The central rule wizard is create-only. Remove its legacy source
+            # only after every existing room owns an independent, retry-safe
+            # copy.
             data.pop(CONF_GLOBAL_TIME_RULES, None)
             options.pop(CONF_GLOBAL_TIME_RULES, None)
             data.pop(CONF_TIME_RULES, None)
@@ -445,6 +605,7 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             version=_ENTRY_VERSION,
             minor_version=0,
         )
+        schedule_room_entry_reloads(hass, updated_room_ids)
         return True
 
     covers = _ordered_covers(data, options)
@@ -463,11 +624,22 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
 
         raw_rules = _merged_value(data, options, CONF_TIME_RULES, []) or []
+        invalid_room_rules: list[Any] = []
         normalized_rules = _normalize_rules(
             raw_rules,
             scope=RULE_SCOPE_ROOM,
             covers=covers,
+            id_namespace=f"{entry.entry_id}:room",
+            preserve_disabled=True,
+            invalid_rules=invalid_room_rules,
         )
+        if invalid_room_rules:
+            _LOGGER.error(
+                "Cannot safely migrate %s invalid room time rule(s) from %s",
+                len(invalid_room_rules),
+                entry.title,
+            )
+            return False
 
         for index in range(1, LEGACY_MAX_SCHEDULES + 1):
             if _merged_value(data, options, f"{LEGACY_CONF_SCHEDULE_PREFIX}{index}", None):
@@ -486,13 +658,6 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         options[CONF_COVER_CONTACTS] = contact_mapping
         options[CONF_TIME_RULES] = normalized_rules
 
-    if original_version < 19:
-        # The new create-only global workflow deliberately starts from a clean
-        # schedule state. Remove every existing room rule regardless of whether
-        # it originated globally, locally or from a legacy schedule helper.
-        data.pop(CONF_TIME_RULES, None)
-        options[CONF_TIME_RULES] = []
-
     central_positions = _central_position_values_for_migration(hass)
     for key, default in POSITION_DEFAULTS.items():
         raw_value = options.get(key, data.get(key, central_positions.get(key, default)))
@@ -503,67 +668,6 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         data.pop(key, None)
         options[key] = max(0, min(100, value))
     options.setdefault(CONF_TIME_RULE_CLOSE_POSITION, 0)
-
-    if original_version < 15:
-        # Earlier detector versions could mistake provider synchronization for
-        # a user action. Remove the old runtime markers once so a false override
-        # is not carried into the corrected detector, even when persistence is
-        # enabled for this room.
-        try:
-            await Store(
-                hass, 1, f"{DOMAIN}.{entry.entry_id}.manual_overrides"
-            ).async_save({})
-        except Exception:  # noqa: BLE001 - stale state must not block migration
-            _LOGGER.debug("Could not clear legacy manual overrides", exc_info=True)
-        control_store = Store(
-            hass, 1, f"{DOMAIN}.{entry.entry_id}.control_state"
-        )
-        try:
-            control_state = await control_store.async_load()
-        except Exception:  # noqa: BLE001 - migration must remain recoverable
-            control_state = None
-        if isinstance(control_state, dict) and control_state.get(
-            "time_rule_manual_releases"
-        ):
-            control_state = dict(control_state)
-            control_state["time_rule_manual_releases"] = []
-            try:
-                await control_store.async_save(control_state)
-            except Exception:  # noqa: BLE001 - stale state must not block migration
-                _LOGGER.debug(
-                    "Could not clear legacy manual night-rule releases",
-                    exc_info=True,
-                )
-
-    if original_version < 19:
-        # Remove all persisted execution markers and deferred commands belonging
-        # to deleted time rules. Preserve unrelated room mode and enable state.
-        control_store = Store(
-            hass, 1, f"{DOMAIN}.{entry.entry_id}.control_state"
-        )
-        try:
-            control_state = await control_store.async_load()
-        except Exception:  # noqa: BLE001 - stale state must not block migration
-            control_state = None
-        if isinstance(control_state, dict):
-            control_state = dict(control_state)
-            control_state.update(
-                {
-                    "last_time_rule_check": None,
-                    "time_rule_manual_releases": [],
-                    "executed_time_rule_occurrences": [],
-                    "pending_time_rule_opens": {},
-                    "pending_time_rule_closes": [],
-                    "pending_time_rule_close_ready_at": {},
-                }
-            )
-            try:
-                await control_store.async_save(control_state)
-            except Exception:  # noqa: BLE001 - stale state must not block migration
-                _LOGGER.debug(
-                    "Could not clear time-rule runtime state during migration",
-                    exc_info=True,
-                )
 
     hass.config_entries.async_update_entry(
         entry,
@@ -581,13 +685,46 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
+def _global_runtime_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Return central values consumed directly by shared runtime logic."""
+    return {
+        key: value
+        for key, value in config.items()
+        if key not in _GLOBAL_TRANSFER_ONLY_KEYS
+    }
+
+
 async def _async_global_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Refresh shared coordinator data after central changes."""
-    coordinator = await async_get_or_create_coordinator(
-        hass, entry, global_config(hass)
-    )
-    coordinator.update_config(entry, global_config(hass))
+    """Apply committed central runtime changes and then reload dependants."""
+    updated_config = global_config(hass)
+    runtime_data = getattr(entry, "runtime_data", None)
+    if isinstance(runtime_data, SmartShadingDataCoordinator):
+        coordinator = runtime_data
+        previous_config = dict(coordinator.config)
+    else:
+        previous_config = {}
+        coordinator = await async_get_or_create_coordinator(
+            hass,
+            entry,
+            updated_config,
+        )
+
+    runtime_changed = _global_runtime_config(
+        previous_config
+    ) != _global_runtime_config(updated_config)
+    coordinator.update_config(entry, updated_config)
+    if not runtime_changed:
+        return
+
     await coordinator.async_request_refresh()
+    schedule_room_entry_reloads(
+        hass,
+        (
+            room_entry.entry_id
+            for room_entry in hass.config_entries.async_entries(DOMAIN)
+            if entry_type(room_entry) == ENTRY_TYPE_ROOM
+        ),
+    )
 
 
 def _claim_covers(hass: HomeAssistant, entry: ConfigEntry, covers: list[str]) -> None:
@@ -630,15 +767,200 @@ def _release_covers(hass: HomeAssistant, entry: ConfigEntry) -> None:
             owners.pop(cover, None)
 
 
+def _entry_source_entity_ids(entry: ConfigEntry) -> set[str]:
+    """Return valid entity IDs referenced by one config entry."""
+    data = dict(entry.data)
+    data.pop(PENDING_ENTITY_RENAMES_KEY, None)
+    return {
+        candidate
+        for payload in (data, dict(entry.options))
+        for candidate in iter_config_entity_id_candidates(payload)
+        if valid_entity_id(candidate)
+    }
+
+
+def _entry_data_with_pending_entity_rename(
+    entry: ConfigEntry,
+    old_entity_id: str,
+    new_entity_id: str,
+) -> dict[str, Any]:
+    """Persist a rename marker without changing live source references yet."""
+    data = dict(entry.data)
+    pending = normalize_pending_entity_renames(
+        data.get(PENDING_ENTITY_RENAMES_KEY)
+    )
+    pending.append(
+        {
+            "old_entity_id": old_entity_id,
+            "new_entity_id": new_entity_id,
+        }
+    )
+    data[PENDING_ENTITY_RENAMES_KEY] = normalize_pending_entity_renames(pending)
+    return data
+
+
+async def _async_apply_pending_entity_renames(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+) -> None:
+    """Apply a staged rename after the old controller completed its unload."""
+    if PENDING_ENTITY_RENAMES_KEY not in entry.data:
+        return
+    renames = normalize_pending_entity_renames(
+        entry.data.get(PENDING_ENTITY_RENAMES_KEY)
+    )
+    if entry_type(entry) == ENTRY_TYPE_ROOM:
+        try:
+            for suffix in _PERSISTENT_ROOM_STORE_SUFFIXES:
+                store = Store(
+                    hass,
+                    1,
+                    f"{DOMAIN}.{entry.entry_id}.{suffix}",
+                    atomic_writes=True,
+                )
+                stored = await async_load_persistent_store(hass, store)
+                if stored is None:
+                    continue
+                if not isinstance(stored, dict):
+                    raise TypeError(f"Store {store.key} has an invalid structure")
+                migrated = apply_pending_entity_renames(stored, renames)
+                if migrated != stored:
+                    await store.async_save(migrated)
+        except Exception as err:
+            # Keep both the old live references and the marker. A later setup
+            # can safely retry because exact old-to-new substitutions are
+            # idempotent.
+            raise ConfigEntryNotReady(
+                "Could not migrate persistent state after an entity registry rename"
+            ) from err
+
+    data = dict(entry.data)
+    data.pop(PENDING_ENTITY_RENAMES_KEY, None)
+    data = apply_pending_config_entity_renames(data, renames)
+    options = apply_pending_config_entity_renames(dict(entry.options), renames)
+    hass.config_entries.async_update_entry(entry, data=data, options=options)
+
+
+async def _async_handle_source_entity_rename(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    event: Event[er.EventEntityRegistryUpdatedData],
+) -> None:
+    """Migrate every reference when Home Assistant renames a source entity."""
+    event_data = event.data
+    old_entity_id = event_data.get("old_entity_id")
+    new_entity_id = event_data.get("entity_id")
+    if (
+        event_data.get("action") != "update"
+        or not isinstance(old_entity_id, str)
+        or not isinstance(new_entity_id, str)
+        or old_entity_id == new_entity_id
+    ):
+        return
+
+    is_global = entry_type(entry) == ENTRY_TYPE_GLOBAL
+    data = _entry_data_with_pending_entity_rename(
+        entry,
+        old_entity_id,
+        new_entity_id,
+    )
+    hass.config_entries.async_update_entry(entry, data=data)
+
+    if not await hass.config_entries.async_reload(entry.entry_id):
+        _LOGGER.error(
+            "Could not reload %s after entity registry rename %s to %s; the "
+            "durable migration marker will retry on the next setup",
+            entry.title,
+            old_entity_id,
+            new_entity_id,
+        )
+        return
+
+    if is_global:
+        # Central source listeners also feed every room controller. The global
+        # setup has already committed the reference and refreshed its shared
+        # coordinator; now rebuild all dependent room listeners.
+        schedule_room_entry_reloads(
+            hass,
+            (
+                room_entry.entry_id
+                for room_entry in hass.config_entries.async_entries(DOMAIN)
+                if entry_type(room_entry) == ENTRY_TYPE_ROOM
+            ),
+        )
+
+
+def _register_source_entity_rename_listener(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+) -> None:
+    """Track registry changes for the source IDs referenced by this entry."""
+    entity_ids = _entry_source_entity_ids(entry)
+    if not entity_ids:
+        return
+
+    async def async_registry_updated(
+        event: Event[er.EventEntityRegistryUpdatedData],
+    ) -> None:
+        await _async_handle_source_entity_rename(hass, entry, event)
+
+    entry.async_on_unload(
+        async_track_entity_registry_updated_event(
+            hass,
+            entity_ids,
+            async_registry_updated,
+        )
+    )
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up central settings or one smart shading room."""
+    await _async_apply_pending_entity_renames(hass, entry)
     if entry_type(entry) == ENTRY_TYPE_GLOBAL:
+        _distribute_pending_global_time_rules(hass, entry)
+        runtime = hass.data.get(DOMAIN)
+        previous_coordinator = (
+            runtime.get(COORDINATOR_KEY) if isinstance(runtime, dict) else None
+        )
+        is_reattaching = (
+            isinstance(previous_coordinator, SmartShadingDataCoordinator)
+            and previous_coordinator.entry is None
+        )
         coordinator = await async_get_or_create_coordinator(
             hass, entry, global_config(hass)
         )
         entry.runtime_data = coordinator
         entry.async_on_unload(entry.add_update_listener(_async_global_updated))
+        _register_source_entity_rename_listener(hass, entry)
+
+        # A DataUpdateCoordinator refresh interval runs only while it has at
+        # least one listener. Keep central Repairs and provider health current
+        # even when the building currently has no room entries.
+        entry.async_on_unload(coordinator.async_add_listener(lambda: None))
+        if hass.state is not CoreState.running:
+
+            async def _async_global_started(_event: Event) -> None:
+                await coordinator.async_ensure_ready()
+
+            entry.async_on_unload(
+                hass.bus.async_listen_once(
+                    EVENT_HOMEASSISTANT_STARTED,
+                    _async_global_started,
+                )
+            )
+        if is_reattaching:
+            schedule_room_entry_reloads(
+                hass,
+                (
+                    room_entry.entry_id
+                    for room_entry in hass.config_entries.async_entries(DOMAIN)
+                    if entry_type(room_entry) == ENTRY_TYPE_ROOM
+                ),
+            )
         return True
+
+    if (central_entry := global_entry(hass)) is not None:
+        _distribute_pending_global_time_rules(hass, central_entry)
 
     configured_covers = _configured_covers(dict(entry.data), dict(entry.options))
     if len(configured_covers) != len(set(configured_covers)):
@@ -650,24 +972,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass, global_entry(hass), global_config(hass)
     )
     controller = SmartShadingController(hass, entry)
-    _claim_covers(hass, entry, controller.all_covers)
-    entry.runtime_data = controller
     try:
-        # Persistent enable, mode and time-rule state must be loaded before
-        # RestoreEntity callbacks are added. Transient manual state is cleared
-        # before the first forced evaluation can move a cover.
+        # Constructing a controller also acquires its per-entry command queue.
+        # Keep the claim inside the guarded section so a duplicate-cover setup
+        # error cannot leave that otherwise empty queue behind.
+        _claim_covers(hass, entry, controller.all_covers)
+        entry.runtime_data = controller
+        # Persistent enable, mode, time-rule and per-cover manual state must be
+        # loaded before RestoreEntity callbacks are added and before the first
+        # forced evaluation is allowed to move a cover.
         await controller.async_prepare()
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
         await controller.async_start()
+        _register_source_entity_rename_listener(hass, entry)
     except Exception:
         try:
             await controller.async_stop()
-        except Exception:  # noqa: BLE001 - preserve the original setup error
+        except Exception:
             _LOGGER.exception("Could not stop a partially started room controller")
         _release_covers(hass, entry)
         try:
             await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-        except Exception:  # noqa: BLE001 - preserve the original setup error
+        except Exception:
             _LOGGER.exception("Could not unload partially set up room platforms")
         # The queue is owned exclusively by this room entry. A failed setup
         # must remove it so no orphan worker or stale queued command survives a
@@ -680,6 +1006,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload central settings or one room."""
     if entry_type(entry) == ENTRY_TYPE_GLOBAL:
+        if entry.disabled_by is not None:
+            runtime = hass.data.get(DOMAIN)
+            coordinator = (
+                runtime.get(COORDINATOR_KEY) if isinstance(runtime, dict) else None
+            )
+            if isinstance(coordinator, SmartShadingDataCoordinator):
+                coordinator.update_config(None, {})
+            schedule_room_entry_reloads(
+                hass,
+                (
+                    room_entry.entry_id
+                    for room_entry in hass.config_entries.async_entries(DOMAIN)
+                    if entry_type(room_entry) == ENTRY_TYPE_ROOM
+                ),
+            )
         return True
     controller: SmartShadingController = entry.runtime_data
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
@@ -692,17 +1033,56 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Clean entry-owned state and refresh dependants after removal."""
-    delete_entry_issues(hass, entry.entry_id)
     if entry_type(entry) == ENTRY_TYPE_ROOM:
         _release_covers(hass, entry)
+        # Removal normally follows a successful unload. This additional
+        # per-entry cleanup also covers disabled, failed, or partially set-up
+        # entries without touching queues owned by another room.
+        await async_shutdown_command_queue(hass, entry.entry_id)
         await Store(
             hass, 1, f"{DOMAIN}.{entry.entry_id}.manual_overrides"
         ).async_remove()
         await Store(
             hass, 1, f"{DOMAIN}.{entry.entry_id}.control_state"
         ).async_remove()
+        delete_entry_issues(hass, entry.entry_id)
+
+        # The removed entry is already absent from ConfigEntries at this point.
+        # Re-evaluate central Repairs immediately; otherwise deleting the last
+        # Workday/sun-event rule can leave its former issue stale indefinitely
+        # when no room remains to drive the shared coordinator.
+        central_entry = global_entry(hass)
+        if central_entry is not None:
+            runtime = hass.data.get(DOMAIN)
+            coordinator = (
+                runtime.get(COORDINATOR_KEY) if isinstance(runtime, dict) else None
+            )
+            forecast_error = (
+                str((coordinator.data or {}).get("last_error") or "") or None
+                if isinstance(coordinator, SmartShadingDataCoordinator)
+                else None
+            )
+            update_global_repairs(
+                hass,
+                central_entry,
+                global_config(hass),
+                forecast_error=forecast_error,
+            )
         return
 
-    for room_entry in hass.config_entries.async_entries(DOMAIN):
-        if entry_type(room_entry) == ENTRY_TYPE_ROOM and room_entry.state.recoverable:
-            hass.config_entries.async_schedule_reload(room_entry.entry_id)
+    # Stop all shared work from referring to a removed central Config Entry
+    # before deleting its issues or scheduling room reloads. A room evaluation
+    # racing this callback can then no longer recreate issues owned by it.
+    runtime = hass.data.get(DOMAIN)
+    coordinator = runtime.get(COORDINATOR_KEY) if isinstance(runtime, dict) else None
+    if isinstance(coordinator, SmartShadingDataCoordinator):
+        coordinator.update_config(None, {})
+    delete_entry_issues(hass, entry.entry_id)
+    schedule_room_entry_reloads(
+        hass,
+        (
+            room_entry.entry_id
+            for room_entry in hass.config_entries.async_entries(DOMAIN)
+            if entry_type(room_entry) == ENTRY_TYPE_ROOM
+        ),
+    )
