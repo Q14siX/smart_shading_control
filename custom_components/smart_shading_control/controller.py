@@ -6,7 +6,8 @@ import asyncio
 import logging
 import random
 from collections import deque
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from datetime import date, datetime, time, timedelta
 from math import isfinite
 from typing import Any
@@ -192,6 +193,33 @@ def _time_rule_occurrence_sort_key(value: str) -> str:
     return parts[2] if len(parts) == 3 else str(value)
 
 
+def _time_rule_window_start(
+    last_check: datetime | None,
+    now: datetime,
+    catch_up_limit: timedelta,
+) -> datetime:
+    """Return a local schedule-window boundary calculated in absolute time.
+
+    Arithmetic between two datetimes carrying the same ``ZoneInfo`` instance
+    follows wall time and can therefore ignore a DST ``fold``. Keep the cursor
+    comparison and fallback subtraction in UTC, then convert only the final
+    boundary back to Home Assistant's local timezone for the schedule resolver.
+    """
+    now_utc = dt_util.as_utc(now)
+    last_utc = (
+        dt_util.as_utc(last_check)
+        if last_check is not None and last_check.tzinfo is not None
+        else None
+    )
+    if (
+        last_utc is None
+        or last_utc >= now_utc
+        or now_utc - last_utc > catch_up_limit
+    ):
+        last_utc = now_utc - timedelta(minutes=2)
+    return dt_util.as_local(last_utc)
+
+
 _COMMAND_RETRY_DELAYS = (10, 30, 90, 300, 600)
 _MAX_COMMAND_RETRIES = len(_COMMAND_RETRY_DELAYS)
 _FORECAST_STALE_MINUTES = max(90, FORECAST_REFRESH_MINUTES * 3)
@@ -214,6 +242,11 @@ class SmartShadingController:
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self.hass = hass
         self.entry = entry
+        # Config Entry options are committed before Home Assistant begins the
+        # asynchronous reload. Keep the old controller bound to the exact
+        # configuration for which its listeners, cover claims and restored
+        # state were built; the replacement controller takes the new snapshot.
+        self._config = self._resolve_config()
         self.enabled = True
         self.mode = MODE_AUTOMATIC
         self.data: dict[str, Any] = {
@@ -308,12 +341,15 @@ class SmartShadingController:
         self._pending_command_targets: dict[str, tuple[int, datetime]] = {}
         self._command_contexts: dict[str, datetime] = {}
         self._command_context_covers: dict[str, str] = {}
+        self._dispatching_command_contexts: dict[str, tuple[str, str]] = {}
         self._manual_detection_suppressed_until: dict[str, datetime] = {}
         self._manual_overrides: dict[str, datetime] = {}
         self._manual_override_details: dict[str, dict[str, Any]] = {}
         self._temperature_samples: deque[tuple[datetime, float]] = deque(maxlen=48)
         self._previous_level: dict[str, str] = {}
         self._unsubscribers: list[Callable[[], None]] = []
+        self._entry_tasks: set[asyncio.Task[Any]] = set()
+        self._active_operations: set[asyncio.Task[Any]] = set()
         self._debounce_cancel: Callable[[], None] | None = None
         self._command_retry_cancel: Callable[[], None] | None = None
         self._command_retry_at: datetime | None = None
@@ -373,6 +409,10 @@ class SmartShadingController:
 
     @property
     def config(self) -> dict[str, Any]:
+        """Return this controller's immutable-lifetime config snapshot."""
+        return self._config
+
+    def _resolve_config(self) -> dict[str, Any]:
         """Return effective building and independently stored room settings.
 
         Central values with room equivalents are templates only. They are
@@ -514,11 +554,26 @@ class SmartShadingController:
 
     def _create_entry_task(self, coroutine: Any, name: str) -> asyncio.Task[Any]:
         """Create a task owned and cancelled by this room Config Entry."""
-        return self.entry.async_create_task(
+        task = self.entry.async_create_task(
             self.hass,
             coroutine,
             name=f"Smart Shading Control {self.entry.entry_id}: {name}",
         )
+        self._entry_tasks.add(task)
+        task.add_done_callback(self._entry_tasks.discard)
+        return task
+
+    @asynccontextmanager
+    async def _track_active_operation(self) -> AsyncIterator[None]:
+        """Track a service or timer task that this Config Entry does not own."""
+        task = asyncio.current_task()
+        if task is not None:
+            self._active_operations.add(task)
+        try:
+            yield
+        finally:
+            if task is not None:
+                self._active_operations.discard(task)
 
     async def async_prepare(self) -> None:
         """Restore every restart-relevant controller and manual state."""
@@ -663,12 +718,17 @@ class SmartShadingController:
                 and abs(current_tilt_position - previous_tilt_position)
                 >= _MANUAL_POSITION_CHANGE_THRESHOLD
             )
-            if material_position_change or material_tilt_change:
+            if (
+                state.state in {"opening", "closing"}
+                or material_position_change
+                or material_tilt_change
+            ):
                 self._handle_cover_recovery(entity_id, None, state)
 
     async def _handle_homeassistant_started(self, _event: Event) -> None:
         """Run the initial evaluation only after all integrations had a load chance."""
-        await self._async_initial_evaluation()
+        async with self._track_active_operation():
+            await self._async_initial_evaluation()
 
     async def async_stop(self) -> None:
         """Stop listeners and wait for an in-flight evaluation to finish."""
@@ -713,9 +773,30 @@ class SmartShadingController:
         for unsubscribe in self._unsubscribers:
             unsubscribe()
         self._unsubscribers.clear()
+        current_task = asyncio.current_task()
+        active_operations = [
+            task
+            for task in self._active_operations
+            if task is not current_task and not task.done()
+        ]
+        for task in active_operations:
+            task.cancel()
+        if active_operations:
+            await asyncio.gather(*active_operations, return_exceptions=True)
+            self._active_operations.difference_update(active_operations)
         async with self._evaluation_lock:
             self._evaluation_pending = False
             self._evaluation_force = False
+        pending_entry_tasks = [
+            task
+            for task in self._entry_tasks
+            if task is not current_task and not task.done()
+        ]
+        for task in pending_entry_tasks:
+            task.cancel()
+        if pending_entry_tasks:
+            await asyncio.gather(*pending_entry_tasks, return_exceptions=True)
+            self._entry_tasks.difference_update(pending_entry_tasks)
         if not self._prepared:
             # A failed Store restore must never be followed by writing the
             # controller's empty/default dictionaries over the only persistent
@@ -847,13 +928,8 @@ class SmartShadingController:
                     "contact safety",
                 )
 
-        own_command_event = command_related_event or bool(
-            new_state.context
-            and (
-                new_state.context.id in self._command_contexts
-                or getattr(new_state.context, "parent_id", None)
-                in self._command_contexts
-            )
+        own_command_event = command_related_event or self._is_own_command_context(
+            entity_id, new_state.context
         )
         self._schedule_evaluation(invalidate=not own_command_event)
 
@@ -935,12 +1011,15 @@ class SmartShadingController:
 
     async def _handle_command_retry(self, _now: datetime) -> None:
         """Retry the complete room decision after the provider had time to recover."""
-        self._command_retry_cancel = None
-        self._command_retry_at = None
-        self.data["next_provider_retry"] = None
-        await self.async_save_control_state()
-        if self._started:
-            await self.async_evaluate(force=True)
+        async with self._track_active_operation():
+            if not self._started:
+                return
+            self._command_retry_cancel = None
+            self._command_retry_at = None
+            self.data["next_provider_retry"] = None
+            await self.async_save_control_state()
+            if self._started:
+                await self.async_evaluate(force=True)
 
     @callback
     def _schedule_time_rule_close_retry(self) -> None:
@@ -972,10 +1051,12 @@ class SmartShadingController:
 
     async def _handle_time_rule_close_retry(self, _now: datetime) -> None:
         """Reevaluate a night close after the contact stayed closed."""
-        self._time_rule_close_retry_cancel = None
-        self._time_rule_close_retry_at = None
-        self.data["next_time_rule_close_retry"] = None
-        if self._started:
+        async with self._track_active_operation():
+            if not self._started:
+                return
+            self._time_rule_close_retry_cancel = None
+            self._time_rule_close_retry_at = None
+            self.data["next_time_rule_close_retry"] = None
             self._input_revision += 1
             await self.async_evaluate(force=True)
 
@@ -1066,9 +1147,10 @@ class SmartShadingController:
         )
 
     async def _debounced_evaluation(self, _now: datetime) -> None:
-        self._debounce_cancel = None
-        if self._started:
-            await self.async_evaluate()
+        async with self._track_active_operation():
+            self._debounce_cancel = None
+            if self._started:
+                await self.async_evaluate()
 
     @staticmethod
     def _bounded_target_feedback(
@@ -1096,6 +1178,18 @@ class SmartShadingController:
                 <= previous + POSITION_TOLERANCE
             )
         return abs(current - target) <= POSITION_TOLERANCE
+
+    def _is_own_command_context(self, entity_id: str, context: Context | None) -> bool:
+        """Return whether a live command context belongs to this exact cover."""
+        if context is None:
+            return False
+        for context_id in (context.id, getattr(context, "parent_id", None)):
+            if (
+                context_id in self._command_contexts
+                and self._command_context_covers.get(context_id) == entity_id
+            ):
+                return True
+        return False
 
     def _activate_manual_override(
         self,
@@ -1216,13 +1310,7 @@ class SmartShadingController:
         new_position = self._position_from_state(new_state)
         new_tilt_position = self._tilt_position_from_state(new_state)
         context = new_state.context
-        own_context = bool(
-            context
-            and (
-                context.id in self._command_contexts
-                or getattr(context, "parent_id", None) in self._command_contexts
-            )
-        )
+        own_context = self._is_own_command_context(entity_id, context)
         suppressed = (
             self._manual_detection_suppressed_until.get(entity_id, now) > now
         )
@@ -1252,6 +1340,30 @@ class SmartShadingController:
                 vertical_intent[0],
             )
         )
+        moving_states = {"opening", "closing"}
+        if vertical_intent is not None and new_state.state in moving_states:
+            reference_position = (
+                previous_position
+                if previous_position is not None
+                else new_position
+            )
+            if (
+                reference_position is None
+                or abs(vertical_intent[0] - reference_position)
+                <= POSITION_TOLERANCE
+            ):
+                follows_vertical_command = False
+            else:
+                expected_state = (
+                    "opening"
+                    if vertical_intent[0] > reference_position
+                    else "closing"
+                )
+                direction_matches = new_state.state == expected_state
+                follows_vertical_command = direction_matches and (
+                    follows_vertical_command or new_position is None
+                    or previous_position is None
+                )
         follows_tilt_command = bool(
             tilt_intent is not None
             and self._bounded_target_feedback(
@@ -1279,6 +1391,14 @@ class SmartShadingController:
             and new_tilt_position is not None
             and abs(new_tilt_position - previous_tilt_position)
             >= _MANUAL_POSITION_CHANGE_THRESHOLD
+        )
+        unexplained_movement = bool(
+            new_state.state in moving_states and not follows_vertical_command
+        )
+        manual_evidence = bool(
+            material_position_change
+            or material_tilt_change
+            or new_state.state in moving_states
         )
         state_changed = bool(
             new_position is not None
@@ -1313,14 +1433,19 @@ class SmartShadingController:
         if (
             self._manual_detection_ready
             and not own_context
-            and not suppressed
             and (
-                external_context
+                (external_context and manual_evidence)
                 or (
-                    material_position_change
-                    and not follows_vertical_command
+                    not suppressed
+                    and (
+                        unexplained_movement
+                        or (
+                            material_position_change
+                            and not follows_vertical_command
+                        )
+                        or (material_tilt_change and not follows_tilt_command)
+                    )
                 )
-                or (material_tilt_change and not follows_tilt_command)
             )
         ):
             self._activate_manual_override(
@@ -1336,7 +1461,11 @@ class SmartShadingController:
                     else (
                         "recovery_tilt_position_change"
                         if material_tilt_change and not follows_tilt_command
-                        else "recovery_position_change"
+                        else (
+                            "recovery_movement_started"
+                            if unexplained_movement
+                            else "recovery_position_change"
+                        )
                     )
                 ),
                 old_tilt_position=previous_tilt_position,
@@ -1365,10 +1494,7 @@ class SmartShadingController:
         # Contexts created by Smart Shading Control itself always win first.
         # This is the reliable marker for provider state changes caused by one
         # of our own commands.
-        if new.context and (
-            new.context.id in self._command_contexts
-            or getattr(new.context, "parent_id", None) in self._command_contexts
-        ):
+        if self._is_own_command_context(entity_id, new.context):
             return True
         if old.state in {STATE_UNKNOWN, STATE_UNAVAILABLE} or new.state in {
             STATE_UNKNOWN,
@@ -1380,6 +1506,10 @@ class SmartShadingController:
         new_position = self._position_from_state(new)
         old_tilt_position = self._tilt_position_from_state(old)
         new_tilt_position = self._tilt_position_from_state(new)
+        if new_position is not None:
+            self._last_known_positions[entity_id] = new_position
+        if new_tilt_position is not None:
+            self._last_known_tilt_positions[entity_id] = new_tilt_position
         material_tilt_change = bool(
             old_tilt_position is not None
             and new_tilt_position is not None
@@ -1444,12 +1574,21 @@ class SmartShadingController:
             ):
                 vertical_intent = (last_command[0], now)
         vertical_command_feedback = False
+        vertical_target_reached = False
         if vertical_intent is not None:
             commanded_target = vertical_intent[0]
-            reached_target = (
-                new_position is not None
-                and abs(new_position - commanded_target) <= POSITION_TOLERANCE
-                and new.state not in moving_states
+            vertical_target_reached = new.state not in moving_states and (
+                (
+                    new_position is not None
+                    and abs(new_position - commanded_target) <= POSITION_TOLERANCE
+                )
+                or (
+                    new_position is None
+                    and (
+                        (commanded_target <= 50 and new.state == "closed")
+                        or (commanded_target > 50 and new.state == "open")
+                    )
+                )
             )
             follows_command = self._bounded_target_feedback(
                 old_position,
@@ -1487,10 +1626,9 @@ class SmartShadingController:
                     )
                     follows_command = new.state == expected_state
 
-            vertical_command_feedback = reached_target or follows_command
+            vertical_command_feedback = vertical_target_reached or follows_command
             if (
-                new_position is not None
-                and abs(new_position - commanded_target) <= POSITION_TOLERANCE
+                vertical_target_reached
                 and self._pending_command_targets.pop(entity_id, None) is not None
             ):
                 pending_state_changed = True
@@ -1542,6 +1680,14 @@ class SmartShadingController:
             external_context=external_context,
             position_threshold=_MANUAL_POSITION_CHANGE_THRESHOLD,
         )
+
+        # A contextless transition from moving to stationary before the own
+        # target is reached is evidence of a physical STOP, not merely another
+        # point inside the command corridor. Keeping it classified as automatic
+        # would allow a later evaluation to resume the movement against the
+        # user's explicit stop request.
+        if trigger == "movement_stopped" and not vertical_target_reached:
+            vertical_command_feedback = False
 
         if trigger is not None and not vertical_command_feedback:
             self._activate_manual_override(
@@ -1716,6 +1862,20 @@ class SmartShadingController:
 
     def _runtime_storage_state(self) -> dict[str, Any]:
         """Return safety-relevant runtime state using absolute timestamps."""
+        dispatching_vertical_covers = {
+            entity_id
+            for entity_id, channel in self._dispatching_command_contexts.values()
+            if channel == "vertical"
+        }
+        dispatching_tilt_covers = {
+            entity_id
+            for entity_id, channel in self._dispatching_command_contexts.values()
+            if channel == "tilt"
+        }
+        dispatching_covers = {
+            entity_id
+            for entity_id, _channel in self._dispatching_command_contexts.values()
+        }
         return {
             "last_move_at": {
                 entity: timestamp.isoformat()
@@ -1736,6 +1896,7 @@ class SmartShadingController:
                 entity: {"target": target, "issued_at": issued_at.isoformat()}
                 for entity, (target, issued_at) in self._last_command.items()
                 if entity in self.all_covers
+                and entity not in dispatching_vertical_covers
             },
             "pending_command_targets": {
                 entity: {"target": target, "expires_at": expires_at.isoformat()}
@@ -1743,36 +1904,43 @@ class SmartShadingController:
                     self._pending_command_targets.items()
                 )
                 if entity in self.all_covers
+                and entity not in dispatching_vertical_covers
             },
             "command_contexts": {
                 context_id: expiry.isoformat()
                 for context_id, expiry in self._command_contexts.items()
+                if context_id not in self._dispatching_command_contexts
             },
             "command_context_covers": {
                 context_id: entity_id
                 for context_id, entity_id in self._command_context_covers.items()
                 if context_id in self._command_contexts
+                and context_id not in self._dispatching_command_contexts
                 and entity_id in self.all_covers
             },
             "manual_detection_suppressed_until": {
                 entity: expiry.isoformat()
                 for entity, expiry in self._manual_detection_suppressed_until.items()
                 if entity in self.all_covers
+                and entity not in dispatching_covers
             },
             "last_command_origins": {
                 entity: {"origin": origin, "issued_at": issued_at.isoformat()}
                 for entity, (origin, issued_at) in self._last_command_origin.items()
                 if entity in self.all_covers
+                and entity not in dispatching_vertical_covers
             },
             "last_tilt_commands": {
                 entity: {"target": target, "issued_at": issued_at.isoformat()}
                 for entity, (target, issued_at) in self._last_tilt_command.items()
                 if entity in self.all_covers
+                and entity not in dispatching_tilt_covers
             },
             "pending_tilt_targets": {
                 entity: {"target": target, "expires_at": expires_at.isoformat()}
                 for entity, (target, expires_at) in self._pending_tilt_targets.items()
                 if entity in self.all_covers
+                and entity not in dispatching_tilt_covers
             },
             "previous_levels": {
                 orientation: level
@@ -1916,7 +2084,7 @@ class SmartShadingController:
                     continue
                 try:
                     position = int(raw_position)
-                except (TypeError, ValueError):
+                except (OverflowError, TypeError, ValueError):
                     invalid(field)
                 if isinstance(raw_position, bool) or not 0 <= position <= 100:
                     invalid(field)
@@ -1934,7 +2102,7 @@ class SmartShadingController:
                     invalid(field)
                 try:
                     target = int(raw_intent.get("target"))
-                except (TypeError, ValueError):
+                except (OverflowError, TypeError, ValueError):
                     invalid(field)
                 expires_at = parse_aware_utc_timestamp(
                     raw_intent.get("expires_at")
@@ -2055,7 +2223,7 @@ class SmartShadingController:
             if parsed is not None:
                 if parsed.tzinfo is None:
                     parsed = parsed.replace(tzinfo=dt_util.UTC)
-                self._last_time_rule_check = dt_util.as_local(parsed)
+                self._last_time_rule_check = dt_util.as_utc(parsed)
         raw_releases = stored.get("time_rule_manual_releases")
         if isinstance(raw_releases, list):
             self._time_rule_manual_releases = {
@@ -2430,21 +2598,22 @@ class SmartShadingController:
 
     async def _handle_manual_override_expiry(self, _now: datetime) -> None:
         """Expire due per-cover holds, persist them and resume evaluation."""
-        self._override_expiry_cancel = None
-        if not self._started:
-            return
-        previous = dict(self._manual_overrides)
-        self._purge_expired(
-            dt_util.utcnow(),
-            schedule_persistence=False,
-        )
-        if previous != self._manual_overrides:
-            self._override_revision += 1
-            await self._async_save_manual_overrides(self._override_revision)
-            await self.async_save_control_state()
-        self._schedule_manual_override_expiry()
-        if previous != self._manual_overrides:
-            await self.async_evaluate()
+        async with self._track_active_operation():
+            self._override_expiry_cancel = None
+            if not self._started:
+                return
+            previous = dict(self._manual_overrides)
+            self._purge_expired(
+                dt_util.utcnow(),
+                schedule_persistence=False,
+            )
+            if previous != self._manual_overrides:
+                self._override_revision += 1
+                await self._async_save_manual_overrides(self._override_revision)
+                await self.async_save_control_state()
+            self._schedule_manual_override_expiry()
+            if previous != self._manual_overrides:
+                await self.async_evaluate()
 
     async def _async_enforce_contact_safety(self, contact_entity: str) -> None:
         """Apply contact protection only to automatic night closing.
@@ -2604,15 +2773,47 @@ class SmartShadingController:
             return True
         self._last_stop_attempt[entity_id] = now
         context = Context()
+        completion_save_task: asyncio.Task[Any] | None = None
 
         def command_started(started_context: Context, issued_at: datetime) -> None:
             self._command_contexts[started_context.id] = issued_at + timedelta(
                 seconds=COMMAND_GRACE_SECONDS
             )
             self._command_context_covers[started_context.id] = entity_id
-            self._create_entry_task(
-                self.async_save_control_state(), "persist stop context"
+            self._dispatching_command_contexts[started_context.id] = (
+                entity_id,
+                "stop",
             )
+
+        def command_finished(command_result: CommandResult) -> None:
+            nonlocal completion_save_task
+            if command_result.context_id:
+                self._dispatching_command_contexts.pop(
+                    command_result.context_id, None
+                )
+            if not command_result.success:
+                self._last_stop_attempt.pop(entity_id, None)
+                if command_result.context_id:
+                    self._command_contexts.pop(command_result.context_id, None)
+                    self._command_context_covers.pop(
+                        command_result.context_id, None
+                    )
+            if not self._started:
+                return
+            self._handle_command_result(
+                entity_id,
+                command_result,
+                log_message=(
+                    "Could not stop cover %s after a manual stop request"
+                    if manual
+                    else "Could not stop cover %s after contact safety activation"
+                ),
+            )
+            if command_result.issued_at is not None:
+                completion_save_task = self._create_entry_task(
+                    self.async_save_control_state(),
+                    "persist finished stop command",
+                )
 
         self._provider_command_attempted = True
         result = await self._command_queue.async_submit(
@@ -2624,18 +2825,13 @@ class SmartShadingController:
             context=context,
             is_valid=command_is_valid,
             on_started=command_started,
+            on_finished=command_finished,
         )
         if not result.success:
             self._last_stop_attempt.pop(entity_id, None)
-        return self._handle_command_result(
-            entity_id,
-            result,
-            log_message=(
-                "Could not stop cover %s after a manual stop request"
-                if manual
-                else "Could not stop cover %s after contact safety activation"
-            ),
-        )
+        if completion_save_task is not None:
+            await asyncio.shield(completion_save_task)
+        return bool(result.success)
 
     def _handle_command_result(
         self,
@@ -2796,6 +2992,8 @@ class SmartShadingController:
         command_scope: str,
     ) -> None:
         """Manually position selected room covers through the command queue."""
+        if not self._started:
+            return
         configured = set(self.all_covers)
         selected_covers = [
             entity_id
@@ -3048,17 +3246,19 @@ class SmartShadingController:
 
     async def async_group_set_position(self, position: int) -> None:
         """Manually move every configured cover in this room."""
-        await self._async_manual_set_positions(
-            self.all_covers, position, command_scope="group"
-        )
+        async with self._track_active_operation():
+            await self._async_manual_set_positions(
+                self.all_covers, position, command_scope="group"
+            )
 
     async def async_cover_set_position(
         self, entity_id: str, position: int
     ) -> None:
         """Manually move one configured physical cover."""
-        await self._async_manual_set_positions(
-            [entity_id], position, command_scope="individual"
-        )
+        async with self._track_active_operation():
+            await self._async_manual_set_positions(
+                [entity_id], position, command_scope="individual"
+            )
 
     async def _async_manual_stop_covers(
         self, covers: list[str] | tuple[str, ...]
@@ -3178,59 +3378,70 @@ class SmartShadingController:
 
     async def async_group_stop(self) -> None:
         """Stop all moving room covers that support stop."""
-        await self._async_manual_stop_covers(self.all_covers)
+        async with self._track_active_operation():
+            await self._async_manual_stop_covers(self.all_covers)
 
     async def async_cover_stop(self, entity_id: str) -> None:
         """Stop one moving physical cover."""
-        await self._async_manual_stop_covers([entity_id])
+        async with self._track_active_operation():
+            await self._async_manual_stop_covers([entity_id])
 
     async def async_set_enabled(self, enabled: bool) -> None:
         """Enable or disable automatic movements."""
-        self.enabled = enabled
-        self._input_revision += 1
-        if not enabled:
-            self._pending_time_rule_opens.clear()
-            self._clear_pending_time_rule_closes()
-            self.data["pending_time_rule_opens"] = {}
-            self.data["pending_time_rule_closes"] = {}
-            self.data["pending_time_rule_close_count"] = 0
-        await self.async_save_control_state()
-        if enabled:
-            await self.async_evaluate(force=True)
-        else:
-            self._set_reason(STATUS_DISABLED, "control_disabled")
-            self._publish()
+        async with self._track_active_operation():
+            if not self._started:
+                return
+            self.enabled = enabled
+            self._input_revision += 1
+            if not enabled:
+                self._pending_time_rule_opens.clear()
+                self._clear_pending_time_rule_closes()
+                self.data["pending_time_rule_opens"] = {}
+                self.data["pending_time_rule_closes"] = {}
+                self.data["pending_time_rule_close_count"] = 0
+            await self.async_save_control_state()
+            if enabled:
+                await self.async_evaluate(force=True)
+            else:
+                self._set_reason(STATUS_DISABLED, "control_disabled")
+                self._publish()
 
     async def async_set_mode(self, mode: str) -> None:
         """Set one exclusive operating mode and execute it immediately."""
-        self.mode = mode
-        self._input_revision += 1
-        # Selecting a mode is an explicit command. It activates room control,
-        # ends the previous automatic/manual mode and bypasses move throttling.
-        self.enabled = True
-        self._manual_overrides.clear()
-        self._manual_override_details.clear()
-        self.data["manual_overrides"] = {}
-        self.data["manual_override_details"] = {}
-        self._time_rule_manual_releases.clear()
-        self._pending_time_rule_opens.clear()
-        self._clear_pending_time_rule_closes()
-        self._schedule_override_save()
-        await self.async_save_control_state()
-        await self.async_evaluate(force=True)
+        async with self._track_active_operation():
+            if not self._started:
+                return
+            self.mode = mode
+            self._input_revision += 1
+            # Selecting a mode is an explicit command. It activates room control,
+            # ends the previous automatic/manual mode and bypasses move throttling.
+            self.enabled = True
+            self._manual_overrides.clear()
+            self._manual_override_details.clear()
+            self.data["manual_overrides"] = {}
+            self.data["manual_override_details"] = {}
+            self._time_rule_manual_releases.clear()
+            self._pending_time_rule_opens.clear()
+            self._clear_pending_time_rule_closes()
+            self._schedule_override_save()
+            await self.async_save_control_state()
+            await self.async_evaluate(force=True)
 
     async def async_clear_manual_overrides(self) -> None:
         """Clear temporary overrides and manual time-rule releases."""
-        self._manual_overrides.clear()
-        self._manual_override_details.clear()
-        self.data["manual_overrides"] = {}
-        self.data["manual_override_details"] = {}
-        self._time_rule_manual_releases.clear()
-        self._clear_pending_time_rule_closes()
-        self._input_revision += 1
-        self._schedule_override_save()
-        await self.async_save_control_state()
-        await self.async_evaluate(force=True)
+        async with self._track_active_operation():
+            if not self._started:
+                return
+            self._manual_overrides.clear()
+            self._manual_override_details.clear()
+            self.data["manual_overrides"] = {}
+            self.data["manual_override_details"] = {}
+            self._time_rule_manual_releases.clear()
+            self._clear_pending_time_rule_closes()
+            self._input_revision += 1
+            self._schedule_override_save()
+            await self.async_save_control_state()
+            await self.async_evaluate(force=True)
 
     def decision_history_export(self) -> dict[str, Any]:
         """Return the privacy-cleaned chronicle used by HA diagnostics."""
@@ -3238,6 +3449,8 @@ class SmartShadingController:
 
     async def async_clear_decision_log(self) -> None:
         """Clear the in-memory machine-readable decision history."""
+        if not self._started:
+            return
         self._decision_history.clear()
         self._publish()
 
@@ -3463,14 +3676,11 @@ class SmartShadingController:
         catch_up_limit = (
             timedelta(days=1) if workday_dependent else timedelta(minutes=10)
         )
-        rule_window_start = self._last_time_rule_check
-        if (
-            rule_window_start is None
-            or rule_window_start.tzinfo is None
-            or rule_window_start >= local_now
-            or local_now - rule_window_start > catch_up_limit
-        ):
-            rule_window_start = local_now - timedelta(minutes=2)
+        rule_window_start = _time_rule_window_start(
+            self._last_time_rule_check,
+            now,
+            catch_up_limit,
+        )
 
         common_rule_kwargs = {
             "solar_resolver": self._resolve_solar_event,
@@ -3500,7 +3710,7 @@ class SmartShadingController:
         # be resolved. Already-executed occurrence keys suppress duplicates while
         # the cursor is intentionally held back.
         if workday_data_ready:
-            self._last_time_rule_check = local_now
+            self._last_time_rule_check = dt_util.as_utc(now)
             if combined_rules and (
                 self._last_control_state_save is None
                 or now - self._last_control_state_save >= timedelta(minutes=5)
@@ -4368,11 +4578,12 @@ class SmartShadingController:
             last_move = self._last_move.get(entity_id)
             if current is not None and abs(current - target) <= POSITION_TOLERANCE:
                 continue
-            if (
-                current is None
-                and state.state in {"opening", "closing"}
-                and not cover_force
-            ):
+            if state.state in {"opening", "closing"} and not cover_force:
+                # Do not reverse or retarget an in-progress physical/provider
+                # movement merely because restart reconciliation or a periodic
+                # evaluation now sees a numeric intermediate position. Fresh
+                # time-rule events and safety actions retain their explicit
+                # force semantics; ordinary automation waits for the stop edge.
                 continue
             if not cover_force:
                 if current is not None and abs(current - target) < min_change:
@@ -4555,6 +4766,7 @@ class SmartShadingController:
                 service_data = {}
 
             context = Context()
+            completion_save_task: asyncio.Task[Any] | None = None
 
             def command_started(
                 started_context: Context,
@@ -4575,9 +4787,56 @@ class SmartShadingController:
                     commanded_target,
                     issued_at + _PENDING_TARGET_HORIZON,
                 )
-                self._create_entry_task(
-                    self.async_save_control_state(), "persist tilt command marker"
+                self._dispatching_command_contexts[started_context.id] = (
+                    cover_entity,
+                    "tilt",
                 )
+
+            def command_finished(
+                command_result: CommandResult,
+                *,
+                cover_entity: str = entity_id,
+                commanded_target: int = target,
+            ) -> None:
+                nonlocal completion_save_task
+                if command_result.context_id:
+                    self._dispatching_command_contexts.pop(
+                        command_result.context_id,
+                        None,
+                    )
+                if (
+                    not command_result.success
+                    and command_result.issued_at is not None
+                    and command_result.context_id
+                ):
+                    self._command_contexts.pop(command_result.context_id, None)
+                    self._command_context_covers.pop(
+                        command_result.context_id, None
+                    )
+                    if self._last_tilt_command.get(cover_entity) == (
+                        commanded_target,
+                        command_result.issued_at,
+                    ):
+                        self._last_tilt_command.pop(cover_entity, None)
+                    if self._pending_tilt_targets.get(cover_entity) == (
+                        commanded_target,
+                        command_result.issued_at + _PENDING_TARGET_HORIZON,
+                    ):
+                        self._pending_tilt_targets.pop(cover_entity, None)
+                if not self._started:
+                    return
+                self._handle_command_result(
+                    cover_entity,
+                    command_result,
+                    log_message=(
+                        f"Could not set tilt for %s to {commanded_target}"
+                    ),
+                )
+                if command_result.issued_at is not None:
+                    completion_save_task = self._create_entry_task(
+                        self.async_save_control_state(),
+                        "persist finished tilt command",
+                    )
 
             self._provider_command_attempted = True
             queue_result = await self._command_queue.async_submit(
@@ -4592,36 +4851,12 @@ class SmartShadingController:
                 context=context,
                 is_valid=command_is_valid,
                 on_started=command_started,
+                on_finished=command_finished,
             )
-            if (
-                not queue_result.success
-                and queue_result.issued_at is not None
-                and queue_result.context_id
-            ):
-                self._command_contexts.pop(queue_result.context_id, None)
-                self._command_context_covers.pop(queue_result.context_id, None)
-                if self._last_tilt_command.get(entity_id) == (
-                    target,
-                    queue_result.issued_at,
-                ):
-                    self._last_tilt_command.pop(entity_id, None)
-                if self._pending_tilt_targets.get(entity_id) == (
-                    target,
-                    queue_result.issued_at + _PENDING_TARGET_HORIZON,
-                ):
-                    self._pending_tilt_targets.pop(entity_id, None)
-                self._create_entry_task(
-                    self.async_save_control_state(),
-                    "remove failed tilt command marker",
-                )
-            if self._handle_command_result(
-                entity_id,
-                queue_result,
-                log_message=f"Could not set tilt for %s to {target}",
-            ):
+            if completion_save_task is not None:
+                await asyncio.shield(completion_save_task)
+            if queue_result.success:
                 result[entity_id] = target
-        if result and not dry_run:
-            await self.async_save_control_state()
         return result
 
     def _forget_failed_command(
@@ -4644,9 +4879,6 @@ class SmartShadingController:
         origin = self._last_command_origin.get(entity_id)
         if origin is not None and origin[1] == issued_at:
             self._last_command_origin.pop(entity_id, None)
-        self._create_entry_task(
-            self.async_save_control_state(), "remove failed command marker"
-        )
 
     async def _async_move_cover(
         self,
@@ -4712,6 +4944,7 @@ class SmartShadingController:
         context = Context()
 
         command_origin = str(origin or ("manual" if manual else "automatic"))
+        completion_save_task: asyncio.Task[Any] | None = None
 
         def command_started(started_context: Context, issued_at: datetime) -> None:
             self._command_contexts[started_context.id] = issued_at + timedelta(
@@ -4724,9 +4957,43 @@ class SmartShadingController:
                 issued_at + _PENDING_TARGET_HORIZON,
             )
             self._last_command_origin[entity_id] = (command_origin, issued_at)
-            self._create_entry_task(
-                self.async_save_control_state(), "persist command marker"
+            self._dispatching_command_contexts[started_context.id] = (
+                entity_id,
+                "vertical",
             )
+
+        def command_finished(command_result: CommandResult) -> None:
+            nonlocal completion_save_task
+            if command_result.context_id:
+                self._dispatching_command_contexts.pop(
+                    command_result.context_id, None
+                )
+            if (
+                not command_result.success
+                and command_result.issued_at is not None
+                and command_result.context_id
+            ):
+                self._forget_failed_command(
+                    entity_id,
+                    command_result.context_id,
+                    target,
+                    command_result.issued_at,
+                )
+            if not self._started:
+                return
+            self._handle_command_result(
+                entity_id,
+                command_result,
+                log_message=f"Could not move cover %s to {target}",
+            )
+            if command_result.issued_at is not None:
+                # The queue invokes completion even if its original submitter
+                # was cancelled. Keep the confirmed provider outcome durable
+                # without making cancellation able to cancel this save too.
+                completion_save_task = self._create_entry_task(
+                    self.async_save_control_state(),
+                    "persist finished vertical command",
+                )
 
         self._provider_command_attempted = True
         result = await self._command_queue.async_submit(
@@ -4743,16 +5010,11 @@ class SmartShadingController:
             context=context,
             is_valid=command_is_valid,
             on_started=command_started,
+            on_finished=command_finished,
         )
-        if not result.success and result.issued_at is not None and result.context_id:
-            self._forget_failed_command(
-                entity_id, result.context_id, target, result.issued_at
-            )
-        return self._handle_command_result(
-            entity_id,
-            result,
-            log_message=f"Could not move cover %s to {target}",
-        )
+        if completion_save_task is not None:
+            await asyncio.shield(completion_save_task)
+        return bool(result.success)
 
     async def _async_refresh_forecast_if_needed(self, now: datetime) -> None:
         """Use fresh shared forecast data without leaking an old provider."""
@@ -4771,11 +5033,28 @@ class SmartShadingController:
         forecast_type = self._forecast_type if same_persisted_source else None
         if coordinator is not None:
             coordinated_entity = (coordinator.data or {}).get("weather_entity")
-            source_changed = str(coordinated_entity or "") != str(weather_entity or "")
-            if source_changed:
-                coordinator.update_config(coordinator.entry, self.config)
+            configured_entity = (
+                str(coordinator.config.get(CONF_WEATHER_ENTITY) or "") or None
+            )
+            # Only the central Config Entry owns the shared coordinator's
+            # configuration. During its reload, an old room controller may
+            # still evaluate from its immutable old snapshot; it must neither
+            # roll the coordinator back nor consume forecast data from the new
+            # generation. A matching configured source whose refresh data is
+            # merely stale can still be brought current here.
+            if (
+                configured_entity == normalized_source
+                and str(coordinated_entity or "") != str(weather_entity or "")
+            ):
                 await coordinator.async_ensure_ready(force=True)
-            elif (coordinator.data or {}).get("last_error_retryable"):
+                coordinated_entity = (coordinator.data or {}).get("weather_entity")
+            source_matches = (
+                configured_entity == normalized_source
+                and str(coordinated_entity or "") == str(weather_entity or "")
+            )
+            if source_matches and (coordinator.data or {}).get(
+                "last_error_retryable"
+            ):
                 weather_state = (
                     self.hass.states.get(str(weather_entity))
                     if weather_entity
@@ -4786,25 +5065,26 @@ class SmartShadingController:
                     STATE_UNAVAILABLE,
                 }:
                     await coordinator.async_ensure_ready(force=True)
-            coordinated_forecast = list(coordinator.forecast)
-            retryable_failure = bool(
-                (coordinator.data or {}).get("last_error_retryable")
-            )
-            # On a cold restart, retain only a fresh persisted forecast from
-            # this exact provider while its first refresh is transiently
-            # unavailable. A successful empty response intentionally clears it.
-            if coordinated_forecast or not retryable_failure:
-                forecast = coordinated_forecast
-                raw_type = (coordinator.data or {}).get("forecast_type")
-                forecast_type = str(raw_type) if raw_type else None
-                updated = (coordinator.data or {}).get("forecast_updated")
-                updated_at = (
-                    dt_util.parse_datetime(str(updated)) if updated else None
+            if source_matches:
+                coordinated_forecast = list(coordinator.forecast)
+                retryable_failure = bool(
+                    (coordinator.data or {}).get("last_error_retryable")
                 )
-                if updated_at is not None:
-                    if updated_at.tzinfo is None:
-                        updated_at = updated_at.replace(tzinfo=dt_util.UTC)
-                    updated_at = dt_util.as_utc(updated_at)
+                # On a cold restart, retain only a fresh persisted forecast from
+                # this exact provider while its first refresh is transiently
+                # unavailable. A successful empty response intentionally clears it.
+                if coordinated_forecast or not retryable_failure:
+                    forecast = coordinated_forecast
+                    raw_type = (coordinator.data or {}).get("forecast_type")
+                    forecast_type = str(raw_type) if raw_type else None
+                    updated = (coordinator.data or {}).get("forecast_updated")
+                    updated_at = (
+                        dt_util.parse_datetime(str(updated)) if updated else None
+                    )
+                    if updated_at is not None:
+                        if updated_at.tzinfo is None:
+                            updated_at = updated_at.replace(tzinfo=dt_util.UTC)
+                        updated_at = dt_util.as_utc(updated_at)
 
         age_minutes: float | None = None
         if updated_at is not None:

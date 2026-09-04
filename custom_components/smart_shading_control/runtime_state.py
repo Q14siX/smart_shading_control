@@ -29,7 +29,10 @@ def parse_utc_timestamp(value: Any) -> datetime | None:
             return None
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
+    try:
+        return parsed.astimezone(timezone.utc)
+    except (OSError, OverflowError, ValueError):
+        return None
 
 
 def parse_aware_utc_timestamp(value: Any) -> datetime | None:
@@ -48,7 +51,10 @@ def parse_aware_utc_timestamp(value: Any) -> datetime | None:
             return None
     if parsed.tzinfo is None:
         return None
-    return parsed.astimezone(timezone.utc)
+    try:
+        return parsed.astimezone(timezone.utc)
+    except (OSError, OverflowError, ValueError):
+        return None
 
 
 def restore_future_timestamps(
@@ -95,7 +101,7 @@ def restore_recent_target_commands(
             continue
         try:
             target = max(0, min(100, int(raw_value.get("target"))))
-        except (TypeError, ValueError):
+        except (OverflowError, TypeError, ValueError):
             continue
         issued_at = parse_utc_timestamp(raw_value.get("issued_at"))
         if issued_at is None or issued_at > now or now - issued_at > max_age:
@@ -122,7 +128,7 @@ def restore_pending_target_commands(
             continue
         try:
             target = max(0, min(100, int(raw_value.get("target"))))
-        except (TypeError, ValueError):
+        except (OverflowError, TypeError, ValueError):
             continue
         expires_at = parse_utc_timestamp(raw_value.get("expires_at"))
         if (

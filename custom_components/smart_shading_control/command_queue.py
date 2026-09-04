@@ -52,6 +52,9 @@ class CommandResult:
     superseded: bool = False
 
 
+FinishedCallback = Callable[[CommandResult], None]
+
+
 @dataclass(order=True, slots=True)
 class _QueuedCommand:
     """Internal priority-queue item."""
@@ -67,7 +70,10 @@ class _QueuedCommand:
     future: asyncio.Future[CommandResult] = field(compare=False)
     is_valid: ValidityCallback | None = field(compare=False, default=None)
     on_started: StartedCallback | None = field(compare=False, default=None)
+    on_finished: FinishedCallback | None = field(compare=False, default=None)
     started: bool = field(compare=False, default=False)
+    issued_at: datetime | None = field(compare=False, default=None)
+    finished: bool = field(compare=False, default=False)
 
 
 class SmartShadingCommandQueue:
@@ -137,6 +143,7 @@ class SmartShadingCommandQueue:
         context: Context | None = None,
         is_valid: ValidityCallback | None = None,
         on_started: StartedCallback | None = None,
+        on_finished: FinishedCallback | None = None,
     ) -> CommandResult:
         """Queue a command and wait for its provider result."""
         if self._closing:
@@ -213,6 +220,7 @@ class SmartShadingCommandQueue:
                     future=future,
                     is_valid=is_valid,
                     on_started=on_started,
+                    on_finished=on_finished,
                 )
                 self._pending[key] = item
                 heapq.heappush(self._heap, item)
@@ -300,17 +308,18 @@ class SmartShadingCommandQueue:
             except asyncio.CancelledError:
                 pass
             self._worker = None
-        if active is not None and not active.future.done():
+        if active is not None and not active.finished:
             result = CommandResult(
                 success=False,
                 entity_id=active.entity_id,
                 command_type=active.command_type,
                 service=active.service,
+                issued_at=active.issued_at,
                 completed_at=dt_util.utcnow(),
+                context_id=active.context.id if active.started else None,
                 skipped_reason="queue_closed",
             )
-            self._last_result = result
-            active.future.set_result(result)
+            self._finish_item(active, result)
         self._active = None
         self._listeners.clear()
 
@@ -381,6 +390,7 @@ class SmartShadingCommandQueue:
             self._active = item
 
         issued_at = dt_util.utcnow()
+        item.issued_at = issued_at
         if item.on_started is not None:
             try:
                 item.on_started(item.context, issued_at)
@@ -400,9 +410,7 @@ class SmartShadingCommandQueue:
                     error=err,
                     skipped_reason="start_callback_error",
                 )
-                self._last_result = result
-                if not item.future.done():
-                    item.future.set_result(result)
+                self._finish_item(item, result)
                 self._active = None
                 self._notify()
                 return
@@ -418,6 +426,22 @@ class SmartShadingCommandQueue:
                     blocking=True,
                     context=item.context,
                 )
+        except asyncio.CancelledError:
+            self._last_call_monotonic = monotonic()
+            result = CommandResult(
+                success=False,
+                entity_id=item.entity_id,
+                command_type=item.command_type,
+                service=item.service,
+                issued_at=issued_at,
+                completed_at=dt_util.utcnow(),
+                context_id=item.context.id,
+                skipped_reason=(
+                    "queue_closed" if self._closing else "worker_cancelled"
+                ),
+            )
+            self._finish_item(item, result)
+            raise
         except Exception as err:  # noqa: BLE001
             self._last_call_monotonic = monotonic()
             self._failed += 1
@@ -431,9 +455,6 @@ class SmartShadingCommandQueue:
                 context_id=item.context.id,
                 error=err,
             )
-            self._last_result = result
-            if not item.future.done():
-                item.future.set_result(result)
         else:
             self._last_call_monotonic = monotonic()
             self._completed += 1
@@ -446,12 +467,27 @@ class SmartShadingCommandQueue:
                 completed_at=dt_util.utcnow(),
                 context_id=item.context.id,
             )
-            self._last_result = result
-            if not item.future.done():
-                item.future.set_result(result)
         finally:
+            if "result" in locals():
+                self._finish_item(item, result)
             self._active = None
             self._notify()
+
+    def _finish_item(self, item: _QueuedCommand, result: CommandResult) -> None:
+        """Finalize a started item even when its submitter was cancelled."""
+        if item.finished:
+            return
+        item.finished = True
+        self._last_result = result
+        if item.on_finished is not None:
+            try:
+                item.on_finished(result)
+            except Exception:  # Completion cleanup must not strand the queue.
+                _LOGGER.exception(
+                    "Command completion callback failed for %s", item.entity_id
+                )
+        if not item.future.done():
+            item.future.set_result(result)
 
     async def _async_finish_skipped(self, item: _QueuedCommand, reason: str) -> None:
         key = (item.entity_id, item.coalesce_key)

@@ -13,7 +13,7 @@
 
 **Smart Shading Control** ist eine vollständig über die Home-Assistant-Oberfläche konfigurierbare Integration zur intelligenten, sicheren und raumbezogenen Steuerung von Rollläden und Jalousien.
 
-Aktuelle Version: **`20260904.091706`**  
+Aktuelle Version: **`20260904.104856`**  
 Veröffentlichungsstatus: **Stable**
 
 [Deutsch](#deutsch) · [English](#english)
@@ -244,7 +244,7 @@ Smart Shading Control wird unter der [MIT-Lizenz](LICENSE) veröffentlicht.
 
 **Smart Shading Control** is a Home Assistant custom integration for intelligent, safe and room-based control of shutters and blinds. It is configured entirely through the Home Assistant user interface.
 
-Current version: **`20260904.091706`**  
+Current version: **`20260904.104856`**  
 Release status: **Stable**
 
 ### Main features

@@ -28,7 +28,7 @@ async def async_load_persistent_store(hass: Any, store: Any) -> Any:
     if stored is not None:
         return stored
     corrupt_backups = await hass.async_add_executor_job(
-        glob.glob, f"{store_path}.corrupt.*"
+        glob.glob, f"{glob.escape(store_path)}.corrupt.*"
     )
     if existed_before or corrupt_backups:
         raise PersistentStoreUnreadableError(

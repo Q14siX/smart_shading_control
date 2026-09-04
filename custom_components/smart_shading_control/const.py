@@ -6,7 +6,7 @@ from typing import Final
 
 DOMAIN: Final = "smart_shading_control"
 NAME: Final = "Smart Shading Control"
-VERSION: Final = "20260904.091706"
+VERSION: Final = "20260904.104856"
 
 PLATFORMS: Final = ["sensor", "binary_sensor", "switch", "select", "button", "cover"]
 

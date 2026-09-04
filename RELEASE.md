@@ -4,6 +4,81 @@
 
 # Smart Shading Control – Release Notes
 
+## `20260904.104856` – Unabhängige Gegenprüfung und Race-Korrekturen / Independent Adversarial Recheck and Race Corrections
+
+**Veröffentlichungsdatum:** 4. September 2026  
+**Release-Kanal:** Stable  
+**Mindestversion Home Assistant:** 2026.7.0  
+**Config-Entry-Version:** 20
+
+Diese Version dokumentiert ausschließlich die zusätzlichen Befunde und Korrekturen des zweiten, unabhängig und gegenbeweisorientiert durchgeführten Prüfdurchlaufs auf Basis von `20260904.091706`.
+
+---
+
+## Deutsch
+
+### Manuelle Bedienung, eigene Befehle und Neustart
+
+- Eigene Command-Kontexte sind jetzt strikt dem konkreten physischen Rollladen zugeordnet. Ein Kontext von Rollladen A kann eine manuelle Fahrt von Rollladen B nicht mehr als automatische Rückmeldung maskieren.
+- Ein kontextloser physischer STOP innerhalb des noch plausiblen Weges zu einem früheren SSC-Sollwert wird als manuelle Übernahme erkannt. Unerklärte Bewegungs- und Recovery-Zustände gelten nur noch dann als eigene Rückmeldung, wenn Richtung, Zielkorridor und tatsächliche Bewegungsindizien zusammenpassen.
+- Bereits beim Start sichtbare Zustände `opening` und `closing` werden auch ohne messbare Positionsdifferenz vor der ersten Automatik ausgewertet. Eine gewöhnliche Startauswertung hält einen bereits fahrenden Rollladen; nur eine ausdrücklich erzwungene aktuelle Regel- oder Safety-Aktion darf eingreifen.
+- Erreichte Pending-Ziele werden für positionierbare und binäre Cover vollständig bereinigt und erst nach Aktualisierung der Restart-Baseline gespeichert.
+- Provisorische Context-, Ziel- und Suppression-Marker werden während des Provider-Aufrufs von konkurrierenden Store-Snapshots ausgeschlossen. Bestätigte Marker werden erst nach erfolgreichem blockierendem Service-Call persistiert; bei Fehlern werden sie vollständig zurückgerollt.
+- Die Befehlswarteschlange besitzt nun einen idempotenten Abschluss-Callback vor der Future-Auflösung. Er läuft auch dann genau einmal, wenn der ursprüngliche Aufrufer nach `on_started` abgebrochen wurde, und bereinigt beziehungsweise persistiert STOP-, Vertikal- und Lamellenbefehle anhand des tatsächlichen Provider-Ergebnisses.
+
+### Lifecycle, Reload und mehrere Instanzen
+
+- Jeder geladene Raumcontroller arbeitet mit einem unveränderlichen Snapshot seiner Config-Entry-Optionen. Eine alte Controller-Generation kann während eines Reloads weder neue Optionen lesen noch den gemeinsam genutzten Wetter-Coordinator auf eine alte Quelle zurücksetzen oder dessen neue Prognose konsumieren.
+- Controller-eigene Hintergrundtasks sowie extern gestartete Entity-Service- und bereits angelaufene Timer-/Start-Callbacks werden explizit verfolgt. `async_stop()` beendet und joint sie vor den finalen Store-Schreibvorgängen; auch nach einem fehlgeschlagenen Plattform-Unload und anschließender Entfernung kann kein alter Raumtask den gelöschten Store neu anlegen.
+- Der Entity-Registry-Rename-Listener bleibt über Reload-Grenzen stabil, serialisiert verkettete Umbenennungen und wird bei der Entfernung ausdrücklich gelöst.
+- Queue-Erzeugung und -Shutdown bleiben strikt auf die jeweilige Config-Entry-ID begrenzt. Das Entladen oder Entfernen eines Raums beeinflusst keine Warteschlange eines anderen Raums.
+
+### Zeit, Persistenz und Migration
+
+- Zeitregel-Fenster und Cursor rechnen über absolute UTC-Zeit. Die Rückstellung von Sommer- auf Winterzeit kann ein zehnminütiges Catch-up-Fenster nicht mehr unbeabsichtigt auf 70 Minuten erweitern.
+- Zeitstempel an den Grenzen des Python-Datetime-Bereichs sowie numerische Überläufe in Persistenz- und Migrationsdaten werden kontrolliert abgewiesen, statt Setup oder Migration mit `OverflowError` abzubrechen.
+- Die Suche nach von Home Assistant erzeugten `.corrupt.*`-Store-Backups maskiert Sonderzeichen des Konfigurationspfads korrekt und bleibt dadurch auch bei Pfaden mit Glob-Metazeichen fail-closed.
+- Sämtliche älteren Raum- und Zentralregeln werden vor der Migration semantisch validiert. Unbekannte Enums, ungültige Bool-/Zeit-/Offset-/Prioritäts-/Positionswerte und fehlende Pflichtfelder blockieren die Migration ohne Mutation. Mehrdeutige raumweite Legacy-Kontakte werden nicht mehr still gelöscht; nur die eindeutig abbildbare Kombination aus genau einem Cover und einem Kontakt wird automatisch übernommen.
+
+### Zusätzliche Verifikation
+
+- **110 von 110** Regressionstests bestehen. Davon prüfen **44** Tests Restart/Persistenz, **12** die Queue einschließlich Abbruch und Instanzisolation sowie **8** die exakte Cover-Kontakt-Zuordnung einschließlich der Konstellationen mit ausschließlich mittlerem beziehungsweise linkem Kontakt.
+- Syntax-/Bytecode-Prüfung, Vulture mit 80 Prozent Mindestkonfidenz, JSON-Parsing sowie Locale-, Placeholder-, Manifest- und Paketkonsistenz sind erfolgreich. Ruff ist für alle in diesem Durchlauf geänderten Produktions- und Testdateien ohne Befund.
+
+---
+
+## English
+
+### Manual control, owned commands and restart
+
+- Owned command contexts are now bound to the exact physical cover. A context belonging to cover A can no longer mask manual movement of cover B as automatic feedback.
+- A context-free physical STOP inside the still-plausible path to an earlier SSC target is treated as manual takeover. Unexplained movement and recovery states count as owned feedback only when direction, target corridor and real movement evidence agree.
+- Preloaded `opening` and `closing` states are reconciled before the first automatic evaluation even when no measurable position delta exists. An ordinary startup evaluation holds an already-moving cover; only an explicitly forced current rule or safety action may intervene.
+- Reached pending targets are cleared completely for both position-capable and binary covers, and the restart baseline is updated before the cleanup is persisted.
+- Provisional context, target and suppression markers are excluded from concurrent Store snapshots while the provider call is in flight. Confirmed markers are persisted only after the blocking service call succeeds; failures roll every provisional marker back.
+- The command queue now has an idempotent completion callback that runs before waking the waiter. It executes exactly once even when the original submitter is cancelled after `on_started`, and it cleans up or persists STOP, vertical and tilt commands from the real provider outcome.
+
+### Lifecycle, reload and multiple instances
+
+- Each loaded room controller uses an immutable snapshot of its Config Entry options. During reload, an old controller generation can neither read new options nor roll the shared weather coordinator back to an old source or consume the new source's forecast.
+- Controller-owned background tasks, externally initiated entity-service operations and already-running timer/start callbacks are tracked explicitly. `async_stop()` cancels and joins them before final Store writes, preventing an old room task from recreating a deleted Store after failed platform unload followed by removal.
+- The Entity Registry rename listener remains stable across reload boundaries, serializes chained renames and is removed explicitly with the entry.
+- Queue creation and shutdown remain scoped to the individual Config Entry ID. Unloading or removing one room does not affect another room's queue.
+
+### Time, persistence and migration
+
+- Time-rule windows and cursors now use absolute UTC arithmetic. The daylight-saving fall-back transition can no longer expand a ten-minute catch-up window to 70 minutes.
+- Timestamps at Python datetime boundaries and numeric overflow in persisted or migration data are rejected safely instead of crashing setup or migration with `OverflowError`.
+- Home Assistant `.corrupt.*` Store-backup discovery now escapes configuration-path metacharacters, preserving fail-closed behavior even when a path contains glob syntax.
+- Every older room and central rule is semantically validated before migration. Unknown enums, invalid boolean/time/offset/priority/position values and missing required fields block migration without mutation. Ambiguous room-wide legacy contacts are no longer silently deleted; automatic conversion is limited to the unambiguous one-cover/one-contact case.
+
+### Additional validation
+
+- **110 of 110** regression tests pass: **44** cover restart/persistence, **12** cover queue cancellation and instance isolation, and **8** exact cover/contact assignment including middle-only and left-only contact layouts.
+- Syntax/bytecode checks, Vulture at 80 percent confidence, JSON parsing, locale/placeholder checks, manifest consistency and package checks pass. Ruff reports no finding in any production or test file changed by this recheck.
+
+---
+
 ## `20260904.091706` – Restart-, Persistenz- und Lifecycle-Korrekturen / Restart, Persistence and Lifecycle Corrections
 
 **Veröffentlichungsdatum:** 4. September 2026  

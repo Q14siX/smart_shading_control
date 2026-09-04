@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from collections.abc import Callable
 from typing import Any
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
@@ -12,7 +14,6 @@ from homeassistant.core import CoreState, Event, HomeAssistant, valid_entity_id
 from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
-from homeassistant.helpers.event import async_track_entity_registry_updated_event
 from homeassistant.helpers.storage import Store
 
 from .command_queue import async_shutdown_command_queue
@@ -36,6 +37,7 @@ from .const import (
     CONF_PERSIST_MANUAL_OVERRIDES,
     CONF_RULE_ACTION,
     CONF_RULE_COVERS,
+    CONF_RULE_DAY_TYPE,
     CONF_RULE_ENABLED,
     CONF_RULE_END,
     CONF_RULE_END_OFFSET,
@@ -45,6 +47,7 @@ from .const import (
     CONF_RULE_MONDAY,
     CONF_RULE_NAME,
     CONF_RULE_POSITION,
+    CONF_RULE_PRIORITY,
     CONF_RULE_SATURDAY,
     CONF_RULE_SCOPE,
     CONF_RULE_START,
@@ -59,6 +62,7 @@ from .const import (
     CONF_RULE_WEDNESDAY,
     CONF_TIME_RULE_CLOSE_POSITION,
     CONF_TIME_RULES,
+    DAY_TYPES,
     DOMAIN,
     ENTRY_TYPE_GLOBAL,
     ENTRY_TYPE_ROOM,
@@ -75,11 +79,13 @@ from .const import (
     ROOM_DEFAULTS,
     RULE_ACTION_CLOSE,
     RULE_ACTION_OPEN,
+    RULE_ACTIONS,
     RULE_SCOPE_GLOBAL,
     RULE_SCOPE_ROOM,
     TIME_REFERENCE_FIXED,
     TIME_REFERENCE_SUNRISE,
     TIME_REFERENCE_SUNSET,
+    TIME_REFERENCES,
 )
 from .controller import SmartShadingController
 from .coordinator import (
@@ -108,6 +114,8 @@ _LOGGER = logging.getLogger(__name__)
 
 _ENTRY_VERSION = 20
 _COVER_OWNERS_KEY = "cover_owners"
+_SOURCE_RENAME_UNSUBSCRIBERS_KEY = "source_rename_unsubscribers"
+_SOURCE_RENAME_LOCKS_KEY = "source_rename_locks"
 _COVER_KEYS = (
     CONF_COVERS_NORTH,
     CONF_COVERS_EAST,
@@ -120,6 +128,16 @@ _LEGACY_CONTACT_KEYS = (
     LEGACY_CONF_OPEN_WINDOW_SENSORS,
     LEGACY_CONF_TILTED_WINDOW_SENSORS,
     LEGACY_CONF_DOOR_SENSORS,
+)
+_RULE_BOOLEAN_FIELDS = (
+    CONF_RULE_ENABLED,
+    CONF_RULE_MONDAY,
+    CONF_RULE_TUESDAY,
+    CONF_RULE_WEDNESDAY,
+    CONF_RULE_THURSDAY,
+    CONF_RULE_FRIDAY,
+    CONF_RULE_SATURDAY,
+    CONF_RULE_SUNDAY,
 )
 _GLOBAL_TRANSFER_ONLY_KEYS = frozenset(
     {
@@ -272,6 +290,87 @@ def _expand_rule(raw_rule: dict[str, Any]) -> list[dict[str, Any]]:
     return [start_rule, end_rule]
 
 
+def _known_rule_boolean(value: Any) -> bool:
+    """Return whether a stored migration value has unambiguous bool meaning."""
+    if isinstance(value, bool):
+        return True
+    if isinstance(value, (int, float)):
+        return not isinstance(value, bool) and value in {0, 1}
+    if isinstance(value, str):
+        return value.strip().lower() in {
+            "0",
+            "1",
+            "false",
+            "true",
+            "no",
+            "yes",
+            "off",
+            "on",
+            "disabled",
+            "enabled",
+        }
+    return False
+
+
+def _rule_is_safe_to_migrate(raw_rule: dict[str, Any]) -> bool:
+    """Reject values whose tolerant runtime normalization changes semantics."""
+    for field in _RULE_BOOLEAN_FIELDS:
+        if field in raw_rule and not _known_rule_boolean(raw_rule[field]):
+            return False
+
+    is_event_rule = (
+        CONF_RULE_ACTION in raw_rule
+        or CONF_RULE_TRIGGER_REFERENCE in raw_rule
+    )
+    if is_event_rule:
+        if (
+            raw_rule.get(CONF_RULE_ACTION) not in RULE_ACTIONS
+            or raw_rule.get(CONF_RULE_TRIGGER_REFERENCE) not in TIME_REFERENCES
+            or raw_rule.get(CONF_RULE_DAY_TYPE) not in DAY_TYPES
+        ):
+            return False
+        if (
+            raw_rule[CONF_RULE_TRIGGER_REFERENCE] == TIME_REFERENCE_FIXED
+            and CONF_RULE_TRIGGER not in raw_rule
+        ):
+            return False
+        time_fields = (CONF_RULE_TRIGGER,)
+        integer_fields = (
+            (CONF_RULE_TRIGGER_OFFSET, -720, 720),
+            (CONF_RULE_PRIORITY, 1, 100),
+        )
+    else:
+        for field in (CONF_RULE_START_REFERENCE, CONF_RULE_END_REFERENCE):
+            if field in raw_rule and raw_rule[field] not in TIME_REFERENCES:
+                return False
+        time_fields = (CONF_RULE_START, CONF_RULE_END)
+        integer_fields = (
+            (CONF_RULE_START_OFFSET, -720, 720),
+            (CONF_RULE_END_OFFSET, -720, 720),
+            (CONF_RULE_POSITION, 0, 100),
+            (CONF_RULE_PRIORITY, 1, 100),
+        )
+
+    try:
+        for field in time_fields:
+            if field in raw_rule:
+                parse_time(raw_rule[field])
+        for field, lower, upper in integer_fields:
+            if field not in raw_rule:
+                continue
+            raw_value = raw_rule[field]
+            if isinstance(raw_value, bool):
+                return False
+            if isinstance(raw_value, float) and not raw_value.is_integer():
+                return False
+            value = int(raw_value)
+            if not lower <= value <= upper:
+                return False
+    except (OverflowError, TypeError, ValueError):
+        return False
+    return True
+
+
 def _normalize_rules(
     raw_rules: Any,
     *,
@@ -279,6 +378,7 @@ def _normalize_rules(
     covers: list[str] | None = None,
     id_namespace: str | None = None,
     preserve_disabled: bool = False,
+    require_explicit_covers: bool = False,
     invalid_rules: list[Any] | None = None,
 ) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
@@ -296,6 +396,19 @@ def _normalize_rules(
             if invalid_rules is not None:
                 invalid_rules.append(raw_rule)
             continue
+        if not _rule_is_safe_to_migrate(raw_rule):
+            if invalid_rules is not None:
+                invalid_rules.append(raw_rule)
+            continue
+        if require_explicit_covers:
+            raw_rule_covers = raw_rule.get(CONF_RULE_COVERS)
+            if not isinstance(raw_rule_covers, (list, set, str, tuple)) or not any(
+                isinstance(cover, str) and cover in available
+                for cover in as_list(raw_rule_covers)
+            ):
+                if invalid_rules is not None:
+                    invalid_rules.append(raw_rule)
+                continue
 
         enabled = normalize_boolean(raw_rule.get(CONF_RULE_ENABLED), True)
         if not enabled and not preserve_disabled:
@@ -332,7 +445,7 @@ def _normalize_rules(
                 selected = [
                     cover
                     for cover in as_list(rule.get(CONF_RULE_COVERS) or covers or [])
-                    if cover in available
+                    if isinstance(cover, str) and cover in available
                 ]
                 if not selected:
                     if invalid_rules is not None:
@@ -609,6 +722,7 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         return True
 
     covers = _ordered_covers(data, options)
+    raw_room_rules = _merged_value(data, options, CONF_TIME_RULES, []) or []
     had_legacy_schedules = False
     if original_version < 13:
         existing_mapping = _merged_value(data, options, CONF_COVER_CONTACTS, {})
@@ -617,26 +731,9 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if not contact_mapping and len(covers) == 1 and len(old_contacts) == 1:
             contact_mapping[covers[0]] = old_contacts[0]
         elif old_contacts and not contact_mapping:
-            _LOGGER.warning(
-                "Legacy room-wide contacts for %s could not be assigned safely. "
-                "Assign an optional contact to each cover in the room options",
-                entry.title,
-            )
-
-        raw_rules = _merged_value(data, options, CONF_TIME_RULES, []) or []
-        invalid_room_rules: list[Any] = []
-        normalized_rules = _normalize_rules(
-            raw_rules,
-            scope=RULE_SCOPE_ROOM,
-            covers=covers,
-            id_namespace=f"{entry.entry_id}:room",
-            preserve_disabled=True,
-            invalid_rules=invalid_room_rules,
-        )
-        if invalid_room_rules:
             _LOGGER.error(
-                "Cannot safely migrate %s invalid room time rule(s) from %s",
-                len(invalid_room_rules),
+                "Cannot safely assign room-wide legacy contacts for %s to "
+                "individual covers",
                 entry.title,
             )
             return False
@@ -656,7 +753,29 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             data.pop(key, None)
             options.pop(key, None)
         options[CONF_COVER_CONTACTS] = contact_mapping
-        options[CONF_TIME_RULES] = normalized_rules
+
+    # Event rules already existed in public v19 room entries. Validate every
+    # pre-v20 room version before certifying it as v20; the tolerant runtime
+    # normalizer must not reinterpret a damaged enum as an active CLOSE rule.
+    invalid_room_rules: list[Any] = []
+    normalized_rules = _normalize_rules(
+        raw_room_rules,
+        scope=RULE_SCOPE_ROOM,
+        covers=covers,
+        id_namespace=f"{entry.entry_id}:room",
+        preserve_disabled=True,
+        require_explicit_covers=original_version >= 13,
+        invalid_rules=invalid_room_rules,
+    )
+    if invalid_room_rules:
+        _LOGGER.error(
+            "Cannot safely migrate %s invalid room time rule(s) from %s",
+            len(invalid_room_rules),
+            entry.title,
+        )
+        return False
+    data.pop(CONF_TIME_RULES, None)
+    options[CONF_TIME_RULES] = normalized_rules
 
     central_positions = _central_position_values_for_migration(hass)
     for key, default in POSITION_DEFAULTS.items():
@@ -779,6 +898,18 @@ def _entry_source_entity_ids(entry: ConfigEntry) -> set[str]:
     }
 
 
+def _entry_tracked_source_entity_ids(entry: ConfigEntry) -> set[str]:
+    """Return current source IDs plus pending rename-chain destinations."""
+    entity_ids = _entry_source_entity_ids(entry)
+    for rename in normalize_pending_entity_renames(
+        entry.data.get(PENDING_ENTITY_RENAMES_KEY)
+    ):
+        new_entity_id = rename["new_entity_id"]
+        if valid_entity_id(new_entity_id):
+            entity_ids.add(new_entity_id)
+    return entity_ids
+
+
 def _entry_data_with_pending_entity_rename(
     entry: ConfigEntry,
     old_entity_id: str,
@@ -893,24 +1024,98 @@ async def _async_handle_source_entity_rename(
 def _register_source_entity_rename_listener(
     hass: HomeAssistant,
     entry: ConfigEntry,
-) -> None:
-    """Track registry changes for the source IDs referenced by this entry."""
-    entity_ids = _entry_source_entity_ids(entry)
+) -> Callable[[], None] | None:
+    """Track registry renames with dynamic filtering across reload boundaries."""
+    entity_ids = _entry_tracked_source_entity_ids(entry)
     if not entity_ids:
-        return
+        return None
+
+    runtime = hass.data.setdefault(DOMAIN, {})
+    unsubscribers = runtime.setdefault(_SOURCE_RENAME_UNSUBSCRIBERS_KEY, {})
+    if not isinstance(unsubscribers, dict):
+        unsubscribers = {}
+        runtime[_SOURCE_RENAME_UNSUBSCRIBERS_KEY] = unsubscribers
+    existing = unsubscribers.get(entry.entry_id)
+    if callable(existing):
+        return existing
+
+    locks = runtime.setdefault(_SOURCE_RENAME_LOCKS_KEY, {})
+    if not isinstance(locks, dict):
+        locks = {}
+        runtime[_SOURCE_RENAME_LOCKS_KEY] = locks
+    rename_lock = locks.setdefault(entry.entry_id, asyncio.Lock())
 
     async def async_registry_updated(
         event: Event[er.EventEntityRegistryUpdatedData],
     ) -> None:
-        await _async_handle_source_entity_rename(hass, entry, event)
+        async with rename_lock:
+            # A callback queued before removal may acquire the lock afterwards.
+            # Do not resurrect a Config Entry which is no longer registered.
+            if not any(
+                candidate.entry_id == entry.entry_id
+                for candidate in hass.config_entries.async_entries(DOMAIN)
+            ):
+                return
+            old_entity_id = event.data.get("old_entity_id")
+            if (
+                not isinstance(old_entity_id, str)
+                or old_entity_id not in _entry_tracked_source_entity_ids(entry)
+            ):
+                return
+            await _async_handle_source_entity_rename(hass, entry, event)
 
-    entry.async_on_unload(
-        async_track_entity_registry_updated_event(
-            hass,
-            entity_ids,
-            async_registry_updated,
-        )
+    remove_listener = hass.bus.async_listen(
+        er.EVENT_ENTITY_REGISTRY_UPDATED,
+        async_registry_updated,
     )
+    removed = False
+
+    def remove() -> None:
+        nonlocal removed
+        if removed:
+            return
+        removed = True
+        remove_listener()
+        current_runtime = hass.data.get(DOMAIN)
+        current_unsubscribers = (
+            current_runtime.get(_SOURCE_RENAME_UNSUBSCRIBERS_KEY)
+            if isinstance(current_runtime, dict)
+            else None
+        )
+        if (
+            isinstance(current_unsubscribers, dict)
+            and current_unsubscribers.get(entry.entry_id) is remove
+        ):
+            current_unsubscribers.pop(entry.entry_id, None)
+            if not current_unsubscribers:
+                current_runtime.pop(_SOURCE_RENAME_UNSUBSCRIBERS_KEY, None)
+
+    unsubscribers[entry.entry_id] = remove
+    entry.async_on_unload(remove)
+    return remove
+
+
+def _remove_source_entity_rename_listener(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+) -> None:
+    """Remove one entry listener even when Core could not finish its unload."""
+    runtime = hass.data.get(DOMAIN)
+    if not isinstance(runtime, dict):
+        return
+    unsubscribers = runtime.get(_SOURCE_RENAME_UNSUBSCRIBERS_KEY)
+    remove = (
+        unsubscribers.get(entry.entry_id)
+        if isinstance(unsubscribers, dict)
+        else None
+    )
+    if callable(remove):
+        remove()
+    locks = runtime.get(_SOURCE_RENAME_LOCKS_KEY)
+    if isinstance(locks, dict):
+        locks.pop(entry.entry_id, None)
+        if not locks:
+            runtime.pop(_SOURCE_RENAME_LOCKS_KEY, None)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -1033,7 +1238,18 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Clean entry-owned state and refresh dependants after removal."""
+    _remove_source_entity_rename_listener(hass, entry)
     if entry_type(entry) == ENTRY_TYPE_ROOM:
+        controller = getattr(entry, "runtime_data", None)
+        if isinstance(controller, SmartShadingController):
+            try:
+                # Core still invokes the removal callback after a failed
+                # platform unload. Explicitly stop the surviving controller so
+                # its timers, tasks and state listeners cannot outlive the
+                # deleted entry or recreate its removed Stores.
+                await controller.async_stop()
+            except Exception:
+                _LOGGER.exception("Could not stop removed room controller")
         _release_covers(hass, entry)
         # Removal normally follows a successful unload. This additional
         # per-entry cleanup also covers disabled, failed, or partially set-up
