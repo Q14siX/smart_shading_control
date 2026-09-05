@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -14,6 +15,7 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant
 
 from .const import (
+    CONF_EVALUATION_INTERVAL,
     CONF_FROST_ACTION,
     CONF_FROST_PROTECTION_ENABLED,
     CONF_FROST_SAFE_POSITION,
@@ -40,7 +42,7 @@ from .const import (
     STATUS_STORM_PROTECTION,
     STATUS_WIND_PROTECTION,
 )
-from .logic import clamp, weather_factor
+from .solar import SolarInput, build_solar_input
 from .runtime_state import parse_utc_timestamp
 from .schedule import normalize_boolean
 from .state_helpers import attribute_float, temperature_state, temperature_to_celsius
@@ -119,8 +121,29 @@ class WeatherRuntime:
         ):
             self.active_protection = active
 
-    def radiation_factor(self) -> tuple[str | None, float]:
+    def solar_input(self, *, now: datetime) -> SolarInput:
+        """Read every solar input before choosing measured or estimated evidence."""
         config = self.config
+        warnings: list[str] = []
+        max_age = timedelta(minutes=max(30, int(config.get(CONF_EVALUATION_INTERVAL, 5)) * 3))
+
+        def measurement_available(state: Any, source: str) -> bool:
+            if state is None or state.state in {STATE_UNKNOWN, STATE_UNAVAILABLE}:
+                return False
+            # last_reported also changes when an unchanged value is republished.
+            # Do not mistake a stable but freshly reported sensor for stale data.
+            reported = getattr(state, "last_reported", None)
+            if reported is None:
+                reported = getattr(state, "last_updated", None)
+            if isinstance(reported, datetime) and reported.tzinfo is not None:
+                age = now - reported
+                if age > max_age or age < -timedelta(minutes=5):
+                    warnings.append(f"{source}_stale_or_future")
+                    return False
+            if normalize_boolean(state.attributes.get("restored"), False):
+                warnings.append(f"{source}_restored_without_live_report")
+                return False
+            return True
         weather_entity = config.get(CONF_WEATHER_ENTITY)
         weather_state = self.hass.states.get(str(weather_entity)) if weather_entity else None
         weather_available = (
@@ -129,28 +152,36 @@ class WeatherRuntime:
         )
         condition = weather_state.state if weather_available else None
         cloud_coverage = attribute_float(weather_state, "cloud_coverage") if weather_available else None
+        if cloud_coverage is not None and not 0.0 <= cloud_coverage <= 100.0:
+            cloud_coverage = None
 
         irradiance_entity = config.get(CONF_IRRADIANCE_SENSOR)
         irradiance_state = self.hass.states.get(str(irradiance_entity)) if irradiance_entity else None
-        if irradiance_state is not None and irradiance_state.state not in {STATE_UNKNOWN, STATE_UNAVAILABLE}:
+        irradiance = None
+        if measurement_available(irradiance_state, "irradiance"):
             irradiance = normalize_irradiance(
                 irradiance_state.state,
                 irradiance_state.attributes.get(ATTR_UNIT_OF_MEASUREMENT),
             )
-            if irradiance is not None:
-                return condition, clamp(irradiance / 800.0)
 
         illuminance_entity = config.get(CONF_ILLUMINANCE_SENSOR)
         illuminance_state = self.hass.states.get(str(illuminance_entity)) if illuminance_entity else None
-        if illuminance_state is not None and illuminance_state.state not in {STATE_UNKNOWN, STATE_UNAVAILABLE}:
+        illuminance = None
+        if measurement_available(illuminance_state, "illuminance"):
             illuminance = normalize_illuminance(
                 illuminance_state.state,
                 illuminance_state.attributes.get(ATTR_UNIT_OF_MEASUREMENT),
             )
-            if illuminance is not None:
-                return condition, clamp(illuminance / 60000.0)
 
-        return condition, weather_factor(condition, cloud_coverage)
+        result = build_solar_input(
+            condition=condition,
+            cloud_coverage=cloud_coverage,
+            rain_active=self.rain_active(condition),
+            irradiance=irradiance,
+            illuminance=illuminance,
+            measurement_configured=bool(irradiance_entity or illuminance_entity),
+        )
+        return replace(result, input_warnings=tuple(warnings))
 
     def wind_speed(self) -> float | None:
         config = self.config

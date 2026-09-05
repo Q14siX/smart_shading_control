@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from math import cos, isfinite, radians, sin
+from math import cos, isfinite, radians
 from typing import Any
 
 WEATHER_FACTORS: dict[str, float] = {
@@ -66,19 +66,21 @@ def facade_azimuths(north_azimuth: float) -> dict[str, float]:
 
 
 def weather_factor(condition: str | None, cloud_coverage: float | None = None) -> float:
-    """Estimate usable solar radiation from weather information."""
-    if cloud_coverage is not None:
-        try:
-            numeric_clouds = float(cloud_coverage)
-        except (TypeError, ValueError):
-            numeric_clouds = float("nan")
-        if not isfinite(numeric_clouds):
-            return WEATHER_FACTORS.get(condition or "", 0.4)
-        cloud_factor = clamp(1.0 - numeric_clouds / 100.0)
-        if condition in {"rainy", "pouring", "snowy", "snowy-rainy", "hail"}:
-            return min(cloud_factor, WEATHER_FACTORS.get(condition, 0.1))
-        return cloud_factor
-    return WEATHER_FACTORS.get(condition or "", 0.4)
+    """Estimate solar availability conservatively, not measured irradiance.
+
+    Cloud cover may reduce a condition estimate, never turn rain, fog or an
+    overcast report into sunshine. Missing weather does not imply sunshine.
+    """
+    condition_factor = WEATHER_FACTORS.get(condition or "", 0.0)
+    if cloud_coverage is None:
+        return condition_factor
+    try:
+        numeric_clouds = float(cloud_coverage)
+    except (TypeError, ValueError):
+        return condition_factor
+    if not isfinite(numeric_clouds) or not 0.0 <= numeric_clouds <= 100.0:
+        return condition_factor
+    return min(condition_factor, clamp(1.0 - numeric_clouds / 100.0))
 
 
 def sun_incidence(
@@ -89,14 +91,17 @@ def sun_incidence(
     min_elevation: float,
     radiation_factor: float,
 ) -> float:
-    """Calculate relative solar incidence on a facade from 0 to 1."""
-    if sun_elevation < min_elevation:
+    """Estimate exposure of a vertical facade, not irradiance in W/m²."""
+    if not all(isfinite(value) for value in (
+        sun_azimuth, sun_elevation, facade_azimuth, half_angle,
+        min_elevation, radiation_factor,
+    )) or sun_elevation < max(0.0, min_elevation) or sun_elevation > 90.0:
         return 0.0
     difference = angular_difference(sun_azimuth, facade_azimuth)
     if difference > half_angle:
         return 0.0
     azimuth_component = max(0.0, cos(radians(difference)))
-    elevation_component = max(0.15, sin(radians(sun_elevation)))
+    elevation_component = max(0.0, cos(radians(sun_elevation)))
     return clamp(azimuth_component * elevation_component * radiation_factor)
 
 
@@ -232,7 +237,12 @@ def calculate_heat_risk(
     heat_temperature: float,
     forecast_threshold: float,
 ) -> int:
-    """Calculate a transparent heat risk score from 0 to 100."""
+    """Calculate thermal pressure; the solar eligibility gate is separate.
+
+    A cooler exterior is only a potential for heat loss, not proof of open
+    windows or ventilation. Its modest discount cannot veto measured solar
+    gains. An observed falling room temperature supplies separate evidence.
+    """
     room_score = normalized_score(room_temperature, comfort_temperature, heat_temperature + 1.5)
     forecast_score = normalized_score(forecast_max, forecast_threshold - 2.0, forecast_threshold + 6.0)
     outside_score = normalized_score(outside_temperature, comfort_temperature, heat_temperature + 5.0)
@@ -246,6 +256,13 @@ def calculate_heat_risk(
         + solar_score * 15.0
         + trend_score * 10.0
     )
+    cooling_potential = (
+        normalized_score(room_temperature - outside_temperature, 2.0, 10.0)
+        if room_temperature is not None and outside_temperature is not None
+        else 0.0
+    )
+    falling_trend = normalized_score(max(0.0, -temperature_trend), 0.0, 1.5)
+    score -= cooling_potential * 10.0 + falling_trend * 10.0
     return round(clamp(score, 0.0, 100.0))
 
 

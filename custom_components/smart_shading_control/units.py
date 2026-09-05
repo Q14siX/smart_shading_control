@@ -33,7 +33,8 @@ def normalize_irradiance(value: Any, unit: Any) -> float | None:
     if normalized in {"", "w/m2", "w/m²", "w·m-2", "wm-2"}:
         return numeric
     if normalized in {"kw/m2", "kw/m²", "kw·m-2", "kwm-2"}:
-        return numeric * 1000.0
+        converted = numeric * 1000.0
+        return converted if math.isfinite(converted) else None
     return None
 
 
@@ -49,7 +50,8 @@ def normalize_illuminance(value: Any, unit: Any) -> float | None:
     if normalized in {"", "lx", "lux"}:
         return numeric
     if normalized in {"klx", "kilolux"}:
-        return numeric * 1000.0
+        converted = numeric * 1000.0
+        return converted if math.isfinite(converted) else None
     return None
 
 

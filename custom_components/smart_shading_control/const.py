@@ -6,7 +6,7 @@ from typing import Final
 
 DOMAIN: Final = "smart_shading_control"
 NAME: Final = "Smart Shading Control"
-VERSION: Final = "20260904.104856"
+VERSION: Final = "20260905.120435"
 
 PLATFORMS: Final = ["sensor", "binary_sensor", "switch", "select", "button", "cover"]
 
@@ -183,6 +183,10 @@ POSITION_DEFAULTS: Final = {
 POSITION_SETTING_KEYS: Final = tuple(POSITION_DEFAULTS)
 GLOBAL_DEFAULTS: Final = {
     CONF_SUN_ENTITY: "sun.sun",
+    CONF_WEATHER_ENTITY: None,
+    CONF_OUTSIDE_TEMP_SENSOR: None,
+    CONF_IRRADIANCE_SENSOR: None,
+    CONF_ILLUMINANCE_SENSOR: None,
     CONF_WORKDAY_ENTITY: None,
     CONF_AZIMUTH_NORTH: 0.0,
     CONF_MIN_SUN_ELEVATION: 5.0,

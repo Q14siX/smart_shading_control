@@ -593,7 +593,9 @@
           "time_rule_open_skipped_heat_protection": "Zeitregel-Öffnung wegen aktivem Hitzeschutz übersprungen",
           "time_rule_closed": "Zeitgesteuert geschlossen",
           "time_rule_close_blocked_contact": "Nachtabsenkung durch geöffneten Kontakt blockiert",
-          "time_rule_close_contact_delay": "Nachtabsenkung wartet nach Kontaktschließung"
+          "time_rule_close_contact_delay": "Nachtabsenkung wartet nach Kontaktschließung",
+          "dynamic_no_solar_heat_gain": "Dynamik: kein ausreichender solarer Wärmeeintrag",
+          "dynamic_inputs_unavailable": "Dynamik: fehlende Eingangsdaten – Position halten"
         }
       },
       "decision_diagnostics": {
@@ -622,7 +624,9 @@
           "time_rule_open_skipped_heat_protection": "Zeitregel-Öffnung wegen aktivem Hitzeschutz übersprungen",
           "time_rule_closed": "Zeitgesteuert geschlossen",
           "time_rule_close_blocked_contact": "Nachtabsenkung durch geöffneten Kontakt blockiert",
-          "time_rule_close_contact_delay": "Nachtabsenkung wartet nach Kontaktschließung"
+          "time_rule_close_contact_delay": "Nachtabsenkung wartet nach Kontaktschließung",
+          "dynamic_no_solar_heat_gain": "Dynamik: kein ausreichender solarer Wärmeeintrag",
+          "dynamic_inputs_unavailable": "Dynamik: fehlende Eingangsdaten – Position halten"
         }
       },
       "forecast_age": {

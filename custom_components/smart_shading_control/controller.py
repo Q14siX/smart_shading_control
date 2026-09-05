@@ -152,11 +152,8 @@ from .decision_history import DecisionHistory
 from .global_repairs import update_global_repairs
 from .issues import create_issue, delete_issue, delete_stale_entity_issues
 from .logic import (
-    allow_solar_gain,
     as_list,
     binary_cover_target,
-    calculate_heat_risk,
-    choose_dynamic_level,
     clamp,
     facade_azimuths,
     forecast_max_temperature,
@@ -181,6 +178,7 @@ from .state_helpers import (
     temperature_to_celsius,
     tilt_position_from_state,
 )
+from .solar import FacadeHeatAssessment, assess_facade_heat
 from .storage_helpers import async_load_persistent_store
 from .weather_runtime import WeatherRuntime
 
@@ -284,6 +282,9 @@ class SmartShadingController:
             "direct_sun": False,
             "direct_sun_by_orientation": {},
             "sun_incidence_by_orientation": {},
+            "solar_input": {},
+            "heat_assessment_by_orientation": {},
+            "temperature_difference_inside_outside": None,
             "effective_position_settings": {},
             "desired_positions": {},
             "commanded_positions": {},
@@ -447,6 +448,15 @@ class SmartShadingController:
             if key in central_config:
                 result[key] = central_config[key]
         result.update(room_config)
+        if central_config:
+            # Source selection belongs to the central entry. Clear removed
+            # optional sources rather than reviving an old room-local copy.
+            for key in (
+                CONF_SUN_ENTITY, CONF_WEATHER_ENTITY, CONF_OUTSIDE_TEMP_SENSOR,
+                CONF_IRRADIANCE_SENSOR, CONF_ILLUMINANCE_SENSOR,
+                CONF_WIND_SENSOR, CONF_RAIN_SENSOR, CONF_WORKDAY_ENTITY,
+            ):
+                result[key] = central_config.get(key, GLOBAL_DEFAULTS.get(key))
 
         raw_values = central_config.get(CONF_GLOBAL_POSITION_VALUES)
         global_values = raw_values if isinstance(raw_values, dict) else {}
@@ -3568,15 +3578,17 @@ class SmartShadingController:
             and sun_elevation is not None
             and sun_elevation >= float(config[CONF_MIN_SUN_ELEVATION])
         )
-        condition, radiation = self._weather.radiation_factor()
+        solar = self._weather.solar_input(now=now)
+        condition, radiation = solar.condition, solar.radiation_factor
         wind_speed = self._weather.wind_speed()
-        rain_active = self._weather.rain_active(condition)
+        rain_active = solar.rain_active
 
         calculated_facade_azimuths = facade_azimuths(
             float(config[CONF_AZIMUTH_NORTH])
         )
         incidence: dict[str, float] = {}
         direct: dict[str, bool] = {}
+        heat_assessments: dict[str, FacadeHeatAssessment] = {}
         for orientation, covers in self.covers_by_orientation.items():
             value = 0.0
             if (
@@ -3594,18 +3606,30 @@ class SmartShadingController:
                     radiation,
                 )
             incidence[orientation] = round(value, 3)
-            direct[orientation] = value >= 0.12
+            assessment = assess_facade_heat(
+                solar=solar,
+                incidence=value,
+                daylight=dynamic_daylight,
+                previous_level=self._previous_level.get(orientation),
+                room_temperature=room_temperature,
+                outside_temperature=outside_temperature,
+                forecast_max=forecast_max,
+                temperature_trend=trend,
+                comfort_temperature=float(config[CONF_COMFORT_TEMPERATURE]),
+                heat_temperature=float(config[CONF_HEAT_TEMPERATURE]),
+                strong_heat_temperature=float(config[CONF_STRONG_HEAT_TEMPERATURE]),
+                forecast_threshold=float(config[CONF_FORECAST_THRESHOLD]),
+                risk_hysteresis=int(config[CONF_RISK_HYSTERESIS]),
+                geometry_valid=(sun_azimuth is not None and sun_elevation is not None),
+            )
+            heat_assessments[orientation] = assessment
+            direct[orientation] = assessment.solar_eligible
 
         sun_load = max(incidence.values(), default=0.0)
-        risk = calculate_heat_risk(
-            room_temperature=room_temperature,
-            outside_temperature=outside_temperature,
-            forecast_max=forecast_max,
-            sun_load=sun_load,
-            temperature_trend=trend,
-            comfort_temperature=float(config[CONF_COMFORT_TEMPERATURE]),
-            heat_temperature=float(config[CONF_HEAT_TEMPERATURE]),
-            forecast_threshold=float(config[CONF_FORECAST_THRESHOLD]),
+        risk = max(
+            (assessment.risk for orientation, assessment in heat_assessments.items()
+             if self.covers_by_orientation[orientation]),
+            default=0,
         )
 
         raw_assignments = config.get(CONF_COVER_CONTACTS) or {}
@@ -3863,9 +3887,18 @@ class SmartShadingController:
                 self._availability_reconciliation_covers.difference_update(
                     availability_reconciliation_covers
                 )
+        # A restored/retried OPEN belongs to an older occurrence. After an
+        # outage the latest effective state may already be CLOSE, even when
+        # that close event lies outside the short catch-up window. Never let
+        # an old retry release this newer persistent night closure.
+        superseded_open_retries = (
+            set(self._pending_time_rule_opens) & scheduled_close_covers
+        )
+        if superseded_open_retries:
+            for cover in superseded_open_retries:
+                self._pending_time_rule_opens.pop(cover, None)
+            await self.async_save_control_state()
         pending_open_covers = set(self._pending_time_rule_opens)
-        for cover in pending_open_covers:
-            scheduled_close_covers.discard(cover)
         time_rule_targets.update(
             {
                 cover: int(config[CONF_OPEN_POSITION])
@@ -3952,15 +3985,15 @@ class SmartShadingController:
             reason_code = "mode_heat_protection"
         else:
             targets, statuses, dynamic_status_by_cover = self._dynamic_targets(
-                risk=risk,
-                direct=direct,
-                room_temperature=room_temperature,
-                outside_temperature=outside_temperature,
-                forecast_max=forecast_max,
+                assessments=heat_assessments,
                 dynamic_daylight=dynamic_daylight,
             )
             status = self._dominant_status(statuses)
             reason_code = f"dynamic_{status}"
+            if status == STATUS_UNAVAILABLE:
+                reason_code = "dynamic_inputs_unavailable"
+            elif dynamic_daylight and not any(direct.values()):
+                reason_code = "dynamic_no_solar_heat_gain"
 
             # Opening time rules must never lift an already active heat
             # protection target. Such occurrences are deliberately consumed
@@ -4319,6 +4352,17 @@ class SmartShadingController:
             direct_sun=any(direct.values()),
             direct_sun_by_orientation=direct,
             sun_incidence_by_orientation=incidence,
+            solar_input=solar.diagnostics(),
+            heat_assessment_by_orientation={
+                orientation: assessment.diagnostics()
+                for orientation, assessment in heat_assessments.items()
+                if self.covers_by_orientation[orientation]
+            },
+            temperature_difference_inside_outside=(
+                round(room_temperature - outside_temperature, 2)
+                if room_temperature is not None and outside_temperature is not None
+                else None
+            ),
             effective_position_settings={
                 key: int(config[key]) for key in POSITION_SETTING_KEYS
             },
@@ -4402,82 +4446,40 @@ class SmartShadingController:
     def _dynamic_targets(
         self,
         *,
-        risk: int,
-        direct: dict[str, bool],
-        room_temperature: float | None,
-        outside_temperature: float | None,
-        forecast_max: float | None,
+        assessments: dict[str, FacadeHeatAssessment],
         dynamic_daylight: bool,
     ) -> tuple[dict[str, int], list[str], dict[str, str]]:
+        """Produce daytime proposals only; scheduled night targets apply later."""
         config = self.config
         targets: dict[str, int] = {}
         statuses: list[str] = []
         status_by_cover: dict[str, str] = {}
-
         if not dynamic_daylight:
+            self._previous_level.clear()
             return targets, [STATUS_NORMAL], status_by_cover
 
+        level_settings = {
+            "normal": (CONF_OPEN_POSITION, STATUS_NORMAL),
+            "solar_gain": (CONF_OPEN_POSITION, STATUS_SOLAR_GAIN),
+            "preventive": (CONF_PREVENTIVE_POSITION, STATUS_PREVENTIVE),
+            "heat": (CONF_HEAT_POSITION, STATUS_HEAT_PROTECTION),
+            "strong": (CONF_STRONG_HEAT_POSITION, STATUS_STRONG_HEAT),
+        }
         for orientation, covers in self.covers_by_orientation.items():
             if not covers:
                 continue
-
-            previous = self._previous_level.get(orientation)
-            level = choose_dynamic_level(
-                risk,
-                previous,
-                int(config[CONF_RISK_HYSTERESIS]),
+            assessment = assessments[orientation]
+            if assessment.level == "hold":
+                statuses.append(STATUS_UNAVAILABLE)
+                continue
+            position_key, status = level_settings[assessment.level]
+            self._previous_level[orientation] = (
+                "normal" if assessment.level == "solar_gain" else assessment.level
             )
-
-            solar_gain = direct[orientation] and allow_solar_gain(
-                risk=risk,
-                room_temperature=room_temperature,
-                outside_temperature=outside_temperature,
-                forecast_max=forecast_max,
-                comfort_temperature=float(config[CONF_COMFORT_TEMPERATURE]),
-                forecast_threshold=float(config[CONF_FORECAST_THRESHOLD]),
-            )
-
-            if solar_gain:
-                target = int(config[CONF_OPEN_POSITION])
-                status = STATUS_SOLAR_GAIN
-                effective_level = "normal"
-            elif direct[orientation]:
-                effective_level = level
-                if (
-                    room_temperature is not None
-                    and room_temperature >= float(config[CONF_STRONG_HEAT_TEMPERATURE])
-                ):
-                    effective_level = "strong"
-                elif (
-                    room_temperature is not None
-                    and room_temperature >= float(config[CONF_HEAT_TEMPERATURE])
-                    and effective_level == "preventive"
-                ):
-                    effective_level = "heat"
-
-                if effective_level == "strong":
-                    target = int(config[CONF_STRONG_HEAT_POSITION])
-                    status = STATUS_STRONG_HEAT
-                elif effective_level == "heat":
-                    target = int(config[CONF_HEAT_POSITION])
-                    status = STATUS_HEAT_PROTECTION
-                elif effective_level == "preventive":
-                    target = int(config[CONF_PREVENTIVE_POSITION])
-                    status = STATUS_PREVENTIVE
-                else:
-                    target = int(config[CONF_OPEN_POSITION])
-                    status = STATUS_NORMAL
-            else:
-                target = int(config[CONF_OPEN_POSITION])
-                status = STATUS_NORMAL
-                effective_level = "normal"
-
-            self._previous_level[orientation] = effective_level
             for cover in covers:
-                targets[cover] = target
+                targets[cover] = int(config[position_key])
                 status_by_cover[cover] = status
             statuses.append(status)
-
         return targets, statuses, status_by_cover
 
     def _dominant_status(self, statuses: list[str]) -> str:
@@ -4486,6 +4488,7 @@ class SmartShadingController:
             STATUS_HEAT_PROTECTION,
             STATUS_PREVENTIVE,
             STATUS_SOLAR_GAIN,
+            STATUS_UNAVAILABLE,
             STATUS_NORMAL,
         ]
         for status in priority:

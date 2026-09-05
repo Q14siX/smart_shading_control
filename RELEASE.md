@@ -4,6 +4,63 @@
 
 # Smart Shading Control – Release Notes
 
+## `20260905.120435` – Plausibler Hitzeschutz und gesicherte Nachtpriorität / Solar-aware Heat Protection and Preserved Night Priority
+
+**Veröffentlichung / Release date:** 5. September 2026 / 5 September 2026  
+**Release-Kanal / Release channel:** Stable  
+**Mindestversion / Minimum Home Assistant:** 2026.7.0  
+**Config-Entry-Version / Config Entry version:** 20
+
+### Deutsch
+
+#### Fehlerkorrekturen und neue Hitzebewertung
+
+- **Zentrale Datenquellen:** Raumcontroller übernehmen wieder sämtliche gebäudeweiten Quellen, insbesondere Wetter, Außentemperatur, Einstrahlung und Helligkeit. Diese vier Einträge fehlten in der bisherigen Liste der weitergereichten globalen Schlüssel. Veraltete raumlokale Quellkopien können aktuelle zentrale Quellen nicht mehr verdecken; entfernte optionale Quellen werden nicht wieder aktiviert.
+- **Solare Freigabe vor Temperaturstufe:** Hohe Raumtemperatur und Prognosewerte allein lösen keine Beschattung mehr aus. Eine separate, quellenspezifische Freigabe verlangt ausreichende aktuelle Einstrahlung auf der jeweiligen Fassade. Starker Hitzeschutz benötigt zusätzlich die stärkere solare Freigabe; eine temperaturabhängige Hochstufung kann diese Prüfung nicht umgehen.
+- **Regen, Bewölkung und Lux:** Regen, Nebel und bedeckte Bedingungen werden nicht mehr durch einen Helligkeitssensor oder einen widersprüchlichen Bewölkungswert ausgehebelt. Fehlende Wetterinformationen erzeugen keinen pauschalen Sonnenfaktor. Ein gültiger Einstrahlungsmesswert bleibt als tatsächlicher Energiemesswert von einer Lux-/Wetterschätzung unterscheidbar und kann bei hoher Strahlung auch mit kühler Außenluft Beschattung begründen.
+- **Fassaden, Temperaturdifferenz und Verlauf:** Vertikale Fassaden verwenden den passenden Höhenwinkelanteil statt der bisherigen Sinusgewichtung. Das Risiko wird pro Fassade berechnet. Kühlere Außenluft und beobachtetes Abkühlen senken den Risikowert, ohne eine nicht nachgewiesene Lüftung anzunehmen. Getrennte Ein-/Ausstiegsschwellen für Strahlung und eine Temperaturhysterese verhindern unnötige Wechsel; die bestehende Risikohysterese und Fahrbegrenzung bleiben erhalten.
+- **Ungültige oder alte Daten:** Nicht verwertbare Messwerte werden nicht durch erfundenen Sonnenschein ersetzt. Solarmessungen werden auf gültige Einheiten, endliche Werte, Wiederherstellungskennzeichen und Aktualität geprüft. Die Tagesdynamik hält bei fehlenden notwendigen Daten die Position. Auch Zahlenüberläufe bei kW/m²- und klx-Umrechnungen werden abgefangen.
+
+#### Nachtsteuerung und Bestandsschutz
+
+Die Nachtsteuerung bleibt der Tagesdynamik übergeordnet. Nachlassende Einstrahlung, Regen oder fallende Raumtemperaturen können eine aktive Nacht-Schließregel nicht durch ein dynamisches Öffnungsziel ersetzen. Zusätzlich wurde ein reproduzierbarer Wiederanlauffehler korrigiert: Ein noch gespeicherter Wiederholungsauftrag einer älteren Öffnungsregel konnte nach einem Ausfall eine inzwischen wirksame neuere Schließregel überschreiben. Solche überholten Öffnungsaufträge werden jetzt vor der Zielübergabe entfernt und die Bereinigung wird gespeichert.
+
+Die Zuordnung von Kontakten zu einzelnen Rollläden, die verzögerte Nachholung einer freigegebenen Nachtschließung, manuelle Sperren samt ursprünglichen Ablaufzeitpunkten, bestehende Betriebsarten und die eigenständigen Wetter-/Frostschutzfunktionen bleiben erhalten. Eine ausdrücklich gewählte feste Betriebsart „Hitzeschutz“ bleibt eine feste Position und ist nicht mit der automatischen Einstrahlungsbewertung gleichgesetzt.
+
+#### Diagnose, Paket und Prüfung
+
+Entscheidungsgrund, Hitzerisiko und Sonnenlast erhalten nachvollziehbare Attribute mit Messquelle, Mess-/Wetterwerten, Temperaturdifferenz und Fassadenbewertung. Neue Entscheidungsgründe für fehlenden solaren Wärmeeintrag und Halten wegen fehlender Daten sind vollständig auf Deutsch und Englisch übersetzt, einschließlich der regionalen Sprachdateien. Die README beschreibt Ablauf, Grenzwerte und Grenzen des Modells in beiden Sprachen.
+
+**134 gezielte automatisierte Tests bestanden.** Geprüft wurden unter anderem 17,7 °C außen / 25,6 °C innen bei Regen oder bedecktem Himmel, mit und ohne Luxsensor, echte Einstrahlung trotz kühler Außenluft, ungültige/veraltete Werte, Hysterese, Fassadentrennung, Prognose, Zeit- und Sonnenuntergangsregeln, Nachtpriorität, veraltete Öffnungswiederholungen, Neustart/Persistenz, manuelle Sperren aller drei Rollläden, mittlere/linke Kontaktzuordnung, Kontaktverzögerung, Sicherheitsprioritäten und Trockenlauf. Die produktiven Berechnungs- und Controllermethoden wurden mit simulierter Home-Assistant-Ein-/Ausgabe ausgeführt. Ein Live-Test in Home Assistant mit realen Rollläden war in dieser Umgebung nicht möglich.
+
+Python-Syntax, JSON-Struktur, Sprachschlüssel-/Platzhalterkonsistenz, Versionsgleichheit und ZIP-Inhalt werden zusätzlich geprüft. Das vollständige Paket enthält keine Test-, Cache- oder Entwicklungsartefakte. Original-ICON und Original-LOGO bleiben bytegenau unverändert; ihre SHA-256-Prüfsummen stimmen mit den Referenzen überein. Vorhandene Konfiguration und gespeicherte Schutzzeiten bleiben kompatibel; eine Neueinrichtung ist nicht erforderlich.
+
+### English
+
+#### Fixes and revised heat assessment
+
+- **Central input sources:** Room controllers once again inherit all building-wide sources, particularly weather, outside temperature, irradiance and illuminance. These four entries were absent from the previous list of forwarded global keys. Old room-local source copies can no longer hide current central sources, and removed optional sources are not revived.
+- **Solar eligibility before temperature level:** A hot room or forecast alone no longer triggers shading. A separate source-aware gate requires sufficient current solar exposure on the specific facade. Strong heat protection requires stronger solar eligibility, and temperature-driven escalation cannot bypass that check.
+- **Rain, clouds and lux:** Illuminance and contradictory cloud percentages no longer suppress evidence of rain, fog or overcast conditions. Missing weather does not create a default sunshine factor. A valid irradiance reading remains distinguishable from lux/weather estimates and may justify shading under high radiation even when outside air is cool.
+- **Facades, temperature difference and trend:** Vertical facades use the appropriate elevation-angle component rather than the previous sine weighting. Risk is calculated per facade. Cooler outside air and observed room cooling reduce risk without assuming unverified ventilation. Separate radiation entry/exit thresholds and temperature hysteresis reduce switching; existing risk hysteresis and movement limits are retained.
+- **Invalid or old data:** Unusable measurements are not replaced by invented sunshine. Solar measurements are checked for units, finite values, restored-state flags and reporting age. Missing necessary inputs hold the daytime position. Numeric overflow during kW/m² and klx conversion is also rejected.
+
+#### Night control and existing protection
+
+Night control retains priority over daytime dynamics. Reduced radiation, rain or falling room temperature cannot replace an active scheduled night closure with a dynamic opening target. A reproducible restart issue was also corrected: a persisted retry from an older opening rule could override a newer closing rule after an outage. Superseded opening retries are now removed before targets are submitted, and that cleanup is persisted.
+
+Per-cover contact assignment, delayed night-close retry after contact clearance, manual overrides with their original deadlines, explicit operating modes and independent weather/frost safety functions are retained. Explicitly selecting the fixed “Heat protection” operating mode still requests its fixed position rather than enabling the automatic solar assessment.
+
+#### Diagnostics, package and validation
+
+Reason, heat-risk and solar-load sensors expose the selected source, measured/weather inputs, temperature difference and facade assessments. New reason codes for insufficient solar gain and holding because of missing data are translated in German and English, including regional locale files. The bilingual README documents the decision sequence, thresholds and model limitations.
+
+**134 targeted automated tests passed.** Coverage includes 17.7 °C outside / 25.6 °C inside in rain or overcast conditions, with and without lux input, real irradiance with cool outside air, invalid/stale inputs, hysteresis, facade isolation, forecast, fixed-time and sunset schedules, night priority, obsolete opening retries, restart/persistence, manual locks for all three covers, middle/left contact assignment, contact delay, safety priorities and dry run. Production calculation and controller methods were executed with simulated Home Assistant I/O. A live Home Assistant test with physical covers was not available in this environment.
+
+Python syntax, JSON structure, locale/placeholder consistency, matching versions and ZIP contents are checked separately. The complete package excludes test, cache and development artifacts. Original ICON and LOGO files are byte-for-byte unchanged and match their reference SHA-256 checksums. Existing configuration and persisted protection deadlines remain compatible; no new setup is required.
+
+---
+
 ## `20260904.104856` – Unabhängige Gegenprüfung und Race-Korrekturen / Independent Adversarial Recheck and Race Corrections
 
 **Veröffentlichungsdatum:** 4. September 2026  

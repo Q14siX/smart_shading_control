@@ -13,7 +13,7 @@
 
 **Smart Shading Control** ist eine vollständig über die Home-Assistant-Oberfläche konfigurierbare Integration zur intelligenten, sicheren und raumbezogenen Steuerung von Rollläden und Jalousien.
 
-Aktuelle Version: **`20260904.104856`**  
+Aktuelle Version: **`20260905.120435`**  
 Veröffentlichungsstatus: **Stable**
 
 [Deutsch](#deutsch) · [English](#english)
@@ -93,13 +93,13 @@ Zentrale Positionswerte und die zentrale Sperrzeit für manuelle Bedienungen wer
 
 Zeitregeln verhalten sich bewusst anders: Im globalen Eintrag werden sie nicht gespeichert. Der globale Assistent dient ausschließlich dazu, **eine neue Regel zu erstellen** und als eigenständige Raumregel an jeden zu diesem Zeitpunkt vorhandenen Raum anzuhängen.
 
-Die Rollläden werden zur Laufzeit ausschließlich nach den in ihrem jeweiligen Raum gespeicherten Vorgaben gesteuert. Die zentrale Konfiguration dient als Verwaltungs- und Übertragungsstelle; sie steuert keinen einzelnen Raum direkt.
+Fahrpositionen, Zeitregeln und raumspezifische Vorgaben stammen aus dem jeweiligen Raum. Gebäudeweite Sonnen-, Wetter- und Messquellen werden dagegen aus dem zentralen Eintrag übernommen. Die zentrale Konfiguration sendet selbst keine Fahrbefehle an einen ausgewählten Raum.
 
 #### Räume
 
 Jeder Raum erhält einen eigenen Eintrag mit ausschließlich den Geräten und Einstellungen dieses Raums:
 
-- Raumname und optionaler Raumtemperatursensor
+- Raumname und Raumtemperatursensor
 - Rollläden nach Himmelsrichtung
 - optional ein Öffnungskontakt je Rollladen
 - individuelle Zielpositionen
@@ -109,6 +109,28 @@ Jeder Raum erhält einen eigenen Eintrag mit ausschließlich den Geräten und Ei
 - optionale Lamellenpositionen
 
 Ein Rollladen kann nicht gleichzeitig mehreren Räumen zugeordnet werden.
+
+### Dynamischer Hitzeschutz
+
+Hitzeschutz ist eine Tagesfunktion und wird für jede Fassade getrennt bewertet. Zuerst müssen Sonnenstand, Fassadenausrichtung und eine ausreichend plausible aktuelle Einstrahlung zusammenpassen. Erst danach bestimmen Raumtemperatur, Außentemperatur, Temperaturdifferenz, Raumtemperaturtrend und Temperaturprognose die Stufe. Eine warme Raumtemperatur oder eine hohe Vorhersage allein erzeugt keine Sonneneinstrahlung.
+
+Ein gültiger Einstrahlungssensor liefert tatsächliche Messwerte in W/m². Helligkeit in Lux und Wetterzustände sind dagegen nur Schätzgrundlagen. Regen, Nebel, bedeckter Himmel sowie mindestens 85 % Bewölkung dürfen von einem hohen Luxwert nicht ausgeblendet werden. Bei Regen oder bedecktem Himmel ohne ausreichenden Einstrahlungsmesswert wird deshalb kein dynamischer Hitzeschutz aktiviert. Ein ausreichend hoher tatsächlicher Einstrahlungsmesswert kann auch bei gemeldetem Regen oder kühler Außenluft eine Beschattung begründen.
+
+| Eingangsquelle | Einstieg in Beschattung | Halten einer aktiven Beschattung | Einstieg in starken Hitzeschutz | Halten der starken Einstrahlungsfreigabe |
+|---|---:|---:|---:|---:|
+| Einstrahlungsmessung | 200 W/m² | 160 W/m² | 400 W/m² | 350 W/m² |
+| Helligkeitsmessung mit Wetterprüfung | 30.000 lx | 24.000 lx | 45.000 lx | 40.000 lx |
+| Wetterbasierter Einstrahlungsfaktor | 0,40 | 0,32 | 0,65 | 0,55 |
+
+Die Werte sind Freigabegrenzen, keine alleinigen Fahrbefehle. Auch Luxwerte müssen den zugehörigen Wetterfaktor erreichen. Zusätzlich gilt ein fassadenbezogener Einstrahlungsfaktor von mindestens 0,12 beim Einstieg beziehungsweise 0,09 beim Halten; für die starke Freigabe sind es 0,25 beziehungsweise 0,20. Die Berechnung verwendet den geometrischen Einfall auf eine vertikale Fassade. Die Prozentanzeige ist ein relativer Steuerungswert, keine berechnete Heizleistung und keine Messung direkt am Fenster.
+
+Das Risikomodell gewichtet Raumtemperatur mit maximal 35, Temperaturprognose mit 25, Außentemperatur mit 15, fassadenbezogene Einstrahlung mit 15 und steigende Raumtemperatur mit 10 Punkten. Deutlich kühlere Außenluft und ein tatsächlich fallender Raumtemperaturtrend reduzieren das Risiko jeweils um höchstens 10 Punkte. Die Temperaturdifferenz allein wird ausdrücklich nicht als Nachweis einer offenen Lüftung oder einer tatsächlichen Abkühlung behandelt. Die Risikoeinstiegsgrenzen bleiben 35/55/75 Punkte; die konfigurierte Risikohysterese bleibt wirksam. Temperaturbedingte Hochstufungen benötigen ebenfalls die Einstrahlungsfreigabe; eine Hochstufung auf starken Hitzeschutz benötigt die stärkere Freigabe. Für die temperaturbedingte Rückstufung gilt eine Hysterese von 0,3 °C.
+
+Fehlen benötigte Tages-Eingangsdaten, wird die Position gehalten, statt aus Ersatzannahmen zu öffnen oder zu beschatten. Ungültige Einheiten, negative/nicht endliche Solarmesswerte und reine Wiederherstellungszustände gelten nicht als Messnachweis. Solarsensoren werden anhand von `last_reported` auf Aktualität geprüft: höchstens 30 Minuten beziehungsweise drei Auswertungsintervalle, falls diese länger sind. Mehr als fünf Minuten in der Zukunft liegende Berichte werden ebenfalls verworfen. Ein unverändert, aber frisch gemeldeter Messwert bleibt gültig. Ist ein konfigurierter Messsensor nicht nutzbar, kann eine weitere gültige konfigurierte Messquelle einspringen; ohne solche Messwerte wird nicht stillschweigend auf geschätzten Sonnenschein gewechselt.
+
+**Eine aktive Nacht-Schließregel hat Vorrang vor dem dynamischen Tagesziel.** Das Ende des Hitzeschutzes hebt sie nicht auf. Ein nach einem Ausfall wiederhergestellter alter Öffnungs-Wiederholungsauftrag darf eine neuere Schließregel nicht überschreiben. Fensterkontakte, manuelle Sperren, Mindestfahrabstände und explizite Betriebsarten behalten ihre bisherigen Aufgaben; konfigurierte Sicherheitsfunktionen können weiterhin entsprechend ihrer eigenen Regeln eingreifen.
+
+Die Sensoren für Entscheidungsgrund, Hitzerisiko und Sonnenlast zeigen in ihren Attributen die verwendete Quelle, Wetter-/Messwerte, Temperaturdifferenz und die Bewertung jeder Fassade. `dynamic_no_solar_heat_gain` bedeutet, dass keine ausreichende solare Freigabe vorliegt; `dynamic_inputs_unavailable` bedeutet Halten wegen fehlender oder nicht verwertbarer Daten. Die Grenzwerte sind konservative Steuerungsheuristiken. Ohne Informationen über Verglasung, Fensterflächen, Verschattung, Luftwechsel und interne Wärmequellen lässt sich daraus keine exakte Raumwärmebilanz ableiten.
 
 ### Zeitregeln
 
@@ -244,7 +266,7 @@ Smart Shading Control wird unter der [MIT-Lizenz](LICENSE) veröffentlicht.
 
 **Smart Shading Control** is a Home Assistant custom integration for intelligent, safe and room-based control of shutters and blinds. It is configured entirely through the Home Assistant user interface.
 
-Current version: **`20260904.104856`**  
+Current version: **`20260905.120435`**  
 Release status: **Stable**
 
 ### Main features
@@ -289,9 +311,31 @@ The integration uses one central building entry and separate room entries. Savin
 
 Time rules intentionally use a different workflow. They are never stored in the central entry. The central wizard only creates one new rule and appends an independent copy to every room that exists at that moment.
 
-At runtime, covers are controlled exclusively by the values stored in their own room entry. The central entry is a management and transfer interface; it does not directly control one selected room.
+At runtime, positions, schedules and room-specific settings come from the room entry. Building-wide sun, weather and measurement sources come from the central entry. The central entry itself does not send cover commands to one selected room.
 
 Each room contains only its own covers, contacts, temperature sensor, positions, schedules and manual override settings. A physical cover cannot be assigned to more than one room.
+
+### Dynamic heat protection
+
+Heat protection is a daytime function assessed separately for each facade. Sun position, facade orientation and sufficiently plausible current solar exposure must first agree. Only then do room temperature, outside temperature, their difference, the measured room temperature trend and the temperature forecast determine the level. A hot room or a hot forecast alone cannot create solar evidence.
+
+A valid irradiance sensor provides a measurement in W/m². Illuminance in lux and weather conditions are estimates, not energy measurements. A high lux reading must not hide rain, fog, overcast conditions or cloud coverage of at least 85 %. Rain or overcast conditions without sufficient measured irradiance therefore do not activate dynamic heat protection. Sufficiently high actual irradiance may still justify shading during reported rain or with cool outside air.
+
+| Input source | Enter shading | Hold active shading | Enter strong solar eligibility | Hold strong solar eligibility |
+|---|---:|---:|---:|---:|
+| Irradiance measurement | 200 W/m² | 160 W/m² | 400 W/m² | 350 W/m² |
+| Illuminance with weather validation | 30,000 lx | 24,000 lx | 45,000 lx | 40,000 lx |
+| Weather-derived radiation factor | 0.40 | 0.32 | 0.65 | 0.55 |
+
+These are eligibility thresholds, not standalone movement commands. Lux readings must also meet the corresponding weather-factor threshold. The facade exposure factor must reach 0.12 on entry or 0.09 while holding; strong eligibility requires 0.25 or 0.20 respectively. Geometry accounts for incidence on a vertical facade. The percentage is a relative control value, not heating power or a measurement at the window.
+
+The risk model allocates at most 35 points to room temperature, 25 to the temperature forecast, 15 to outside temperature, 15 to facade-specific exposure and 10 to a rising room temperature. Significantly cooler outside air and an observed falling room temperature each reduce the score by at most 10 points. A temperature difference alone is explicitly not evidence of ventilation or actual cooling. Risk entry thresholds remain 35/55/75 points, with the configured risk hysteresis retained. Temperature-driven escalation also requires solar eligibility; escalation to strong protection requires the stronger eligibility. Temperature-driven de-escalation has 0.3 °C hysteresis.
+
+Missing necessary daytime inputs hold the current position instead of opening or shading from assumed replacement values. Invalid units, negative/non-finite solar measurements and restored-only states do not qualify as measurements. Solar measurements are checked using `last_reported`: at most 30 minutes or three evaluation intervals, whichever is longer. Reports more than five minutes in the future are also rejected. Unchanged but freshly reported measurements remain valid. Another valid configured measurement source may replace an unusable one; when no configured measurement is usable, the system does not silently fall back to estimated sunshine.
+
+**An active scheduled night closure takes precedence over the dynamic daytime target.** Ending heat protection does not release it. An older opening retry restored after an outage cannot override a newer closing rule. Opening contacts, manual overrides, movement intervals and explicit operating modes retain their existing roles; configured safety functions can still intervene under their own rules.
+
+Reason, heat-risk and solar-load sensors expose the selected source, weather/measurement values, temperature difference and each facade assessment in their attributes. `dynamic_no_solar_heat_gain` denotes insufficient solar eligibility; `dynamic_inputs_unavailable` denotes holding because necessary data are missing or unusable. These thresholds are conservative control heuristics. They are not a complete room heat-balance model without glazing, window area, local shading, air-exchange and internal-heat-source data.
 
 ### Time rules
 

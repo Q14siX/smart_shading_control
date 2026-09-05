@@ -593,7 +593,9 @@
           "time_rule_open_skipped_heat_protection": "Scheduled opening skipped due to active heat protection",
           "time_rule_closed": "Closed by time rule",
           "time_rule_close_blocked_contact": "Night closing blocked by open contact",
-          "time_rule_close_contact_delay": "Night closing waiting after contact closed"
+          "time_rule_close_contact_delay": "Night closing waiting after contact closed",
+          "dynamic_no_solar_heat_gain": "Dynamic: insufficient solar heat gain",
+          "dynamic_inputs_unavailable": "Dynamic: missing input data – hold position"
         }
       },
       "decision_diagnostics": {
@@ -622,7 +624,9 @@
           "time_rule_open_skipped_heat_protection": "Scheduled opening skipped due to active heat protection",
           "time_rule_closed": "Closed by time rule",
           "time_rule_close_blocked_contact": "Night closing blocked by open contact",
-          "time_rule_close_contact_delay": "Night closing waiting after contact closed"
+          "time_rule_close_contact_delay": "Night closing waiting after contact closed",
+          "dynamic_no_solar_heat_gain": "Dynamic: insufficient solar heat gain",
+          "dynamic_inputs_unavailable": "Dynamic: missing input data – hold position"
         }
       },
       "forecast_age": {

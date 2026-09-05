@@ -93,6 +93,8 @@ REASON_CODES = [
     "dynamic_preventive",
     "dynamic_solar_gain",
     "dynamic_normal",
+    "dynamic_no_solar_heat_gain",
+    "dynamic_inputs_unavailable",
 ]
 
 SENSOR_DESCRIPTIONS = (
@@ -272,6 +274,20 @@ class SmartShadingSensor(SmartShadingEntity, SensorEntity):
                 "manual_override_details": dict(
                     self.controller.data.get("manual_override_details") or {}
                 ),
+            }
+        if self.entity_description.key in {"heat_risk", "sun_load", "reason_code"}:
+            return {
+                "solar_input": dict(self.controller.data.get("solar_input") or {}),
+                "heat_assessment_by_orientation": dict(
+                    self.controller.data.get("heat_assessment_by_orientation") or {}
+                ),
+                "room_temperature": self.controller.data.get("room_temperature"),
+                "outside_temperature": self.controller.data.get("outside_temperature"),
+                "temperature_difference_inside_outside": self.controller.data.get(
+                    "temperature_difference_inside_outside"
+                ),
+                "temperature_trend": self.controller.data.get("temperature_trend"),
+                "forecast_max": self.controller.data.get("forecast_max"),
             }
         if self.entity_description.key == "command_queue_depth":
             return dict(self.controller.data.get("command_queue") or {})
