@@ -22,8 +22,6 @@ Veröffentlichungsstatus: **Stable**
 
 ## Deutsch
 
-**Wiederanlauf nach manueller Sperre:** Alle fälligen Rollläden werden direkt neu bewertet. Ihre Befehle starten pro Raum gestaffelt mit ungefähr einer Sekunde Abstand (bei drei Rollläden typischerweise 0 / 1 / 2 Sekunden). Die Integration wartet für den nächsten Rollladen nicht auf den Abschluss des vorherigen Serviceaufrufs. Eine abgelaufene Sperre erhält einen gezielten Wiederanlauf, der nicht erneut vom normalen Mindestfahrintervall verzögert wird; noch aktive Sperren anderer Rollläden bleiben wirksam. Für denselben physischen Rollladen bleiben Befehle geordnet. Die Staffelung gilt auch für manuelle Gruppenbefehle und Lamellen-/Kontaktaktionen. Die tatsächliche Motorbewegung hängt von Home Assistant und dem jeweiligen Provider ab.
-
 ### Funktionsumfang
 
 - zentrale Gebäudeeinstellungen und getrennte Raumkonfigurationen
@@ -40,7 +38,7 @@ Veröffentlichungsstatus: **Stable**
 - virtuelle Raum- und Einzel-Cover
 - Status-, Diagnose-, Entscheidungs- und Reparaturentitäten
 - optionale Lamellensteuerung für kompatible Cover-Entitäten
-- Befehlswarteschlange mit mindestens einer Sekunde zwischen den Befehlsstarts pro Raum; langsame Providerantworten blockieren die anderen Rollläden nicht
+- gestaffelte Rollladenbefehle mit einer Sekunde Abstand pro Raum
 
 ### Voraussetzungen
 
@@ -173,6 +171,8 @@ Erkennt die Integration eine manuelle Fahrt, wird der betroffene Rollladen für 
 - eine neu ausgelöste Zeitregel darf eine ältere manuelle Sperre gezielt ersetzen
 - Wiederholungsversuche einer bereits früher ausgelösten Öffnungsregel dürfen eine spätere manuelle Bedienung nicht aufheben
 
+Nach Ablauf einer manuellen Sperre wird der betroffene Rollladen sofort neu bewertet. Sind mehrere Rollläden im Raum fällig, starten die nötigen Fahrbefehle mit einer Sekunde Abstand, ohne auf das nächste Auswertungsintervall zu warten.
+
 Konfigurierte Sicherheitsmaßnahmen können eine manuelle Sperre übersteuern, wenn dies zum Schutz der Anlage erforderlich ist. Bei einem aktiven Wind-, Sturm-, Regen- oder Frostschutz mit vorgegebener Sicherheitsposition wird ein manueller Positionsbefehl, der den Rollladen weiter in die unsichere Richtung fahren würde, auf diese Position begrenzt. Eine Fahrt in die sicherere Richtung bleibt möglich. Die Frost-Aktion **Automatik blockieren** sperrt entsprechend ihrer Konfiguration nur Automatikfahrten. Ein ausdrücklich ausgelöster manueller STOP hat als unmittelbarer Benutzer- beziehungsweise Notstopp Vorrang vor einer noch ausstehenden Fahrt.
 
 ### Neustart- und Reload-Verhalten
@@ -266,8 +266,6 @@ Smart Shading Control wird unter der [MIT-Lizenz](LICENSE) veröffentlicht.
 
 ## English
 
-**Resuming after a manual override:** All due covers are reevaluated immediately. Commands are staggered by approximately one second per room (typically 0 / 1 / 2 seconds for three covers). Dispatch of the next cover does not wait for the previous service call to complete. An expired override receives a targeted resumption that is not delayed again by the ordinary movement cooldown; other covers' active overrides remain effective. Commands to the same physical cover remain ordered. Pacing also applies to manual group commands, tilt and contact actions. Actual motor movement depends on Home Assistant and the underlying provider.
-
 **Smart Shading Control** is a Home Assistant custom integration for intelligent, safe and room-based control of shutters and blinds. It is configured entirely through the Home Assistant user interface.
 
 Current version: **`20260911.154309`**  
@@ -289,7 +287,7 @@ Release status: **Stable**
 - virtual room and individual cover entities
 - diagnostic, decision, status and repair entities
 - optional tilt control for supported covers
-- command queue with at least one second between command starts per room; slow provider responses do not block the other covers
+- staggered cover commands with a one-second interval per room
 
 ### Requirements
 
@@ -365,6 +363,8 @@ A real transition from closed to open or tilted can reopen a cover that was prev
 Detected manual movement temporarily excludes the affected cover from normal automatic commands. Physical switches and gateways that only report a changed position are supported as well.
 
 The default duration is 240 minutes. It can be transferred globally and changed per room afterwards. Active overrides are always stored per cover with their absolute expiry. A restart or reload restores only the original remaining time: expired overrides are discarded, and the configured duration is not started again. Temporary overrides end at the next local midnight.
+
+When a manual override expires, the affected cover is reevaluated immediately. If several covers in the room are due, the required movement commands start one second apart, without waiting for the next evaluation interval.
 
 Configured wind, storm, rain or frost protection with a defined safety position may still enforce that position. A manual position request that would move farther into an unsafe direction is clamped to it, while a request in the safer direction remains possible. The frost action **block automation** restricts automatic commands only, as configured. An explicit manual STOP retains precedence as an immediate user or emergency stop.
 
