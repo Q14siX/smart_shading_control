@@ -228,7 +228,7 @@ Die Steuerung berücksichtigt unter anderem folgende Grundsätze:
 
 ### Release-Historie
 
-Die Version **`20260903.085028`** vom 3. September 2026 war die **erste öffentliche Stable-Veröffentlichung** von Smart Shading Control. Frühere interne Entwicklungs- und Teststände sind keine öffentlichen Releases und werden daher nicht als Update-Historie geführt.
+Die Version **`20260903.085028`** vom 3. September 2026 war die **erste öffentliche Stable-Veröffentlichung** von Smart Shading Control.
 
 Für die Erstinstallation wird Smart Shading Control über HACS oder manuell installiert und anschließend vollständig über die Home-Assistant-Oberfläche eingerichtet. Nach der Installation ist ein vollständiger Neustart von Home Assistant erforderlich.
 
@@ -378,7 +378,7 @@ If an existing persistent safety store is corrupt or semantically invalid, the a
 
 ### Release history
 
-Version **`20260903.085028`**, released on 3 September 2026, was the **first public Stable release** of Smart Shading Control. Earlier internal development and test builds are not public releases and are therefore not presented as an upgrade history.
+Version **`20260903.085028`**, released on 3 September 2026, was the **first public Stable release** of Smart Shading Control.
 
 For a first installation, install Smart Shading Control through HACS or manually and configure it entirely through the Home Assistant user interface. A full Home Assistant restart is required after installation.
 
