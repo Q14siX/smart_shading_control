@@ -407,7 +407,7 @@ def _normalized_position_values(raw: Any) -> dict[str, int]:
     for key, default in POSITION_DEFAULTS.items():
         try:
             value = int(source.get(key, default))
-        except (TypeError, ValueError):
+        except (OverflowError, TypeError, ValueError):
             value = int(default)
         result[key] = max(0, min(100, value))
     return result
@@ -439,7 +439,7 @@ def _configured_global_manual_override_minutes(hass: HomeAssistant) -> int:
         raw = current.get(CONF_GLOBAL_MANUAL_OVERRIDE_MINUTES, raw)
     try:
         value = int(raw)
-    except (TypeError, ValueError):
+    except (OverflowError, TypeError, ValueError):
         value = int(ROOM_DEFAULTS[CONF_MANUAL_OVERRIDE_MINUTES])
     return max(0, min(1440, value))
 
@@ -466,7 +466,7 @@ def _clean_global_manual_override_input(
     """Normalize the central manual-override template."""
     try:
         value = int(user_input[CONF_GLOBAL_MANUAL_OVERRIDE_MINUTES])
-    except (KeyError, TypeError, ValueError):
+    except (KeyError, OverflowError, TypeError, ValueError):
         value = int(GLOBAL_DEFAULTS[CONF_GLOBAL_MANUAL_OVERRIDE_MINUTES])
     return {CONF_GLOBAL_MANUAL_OVERRIDE_MINUTES: max(0, min(1440, value))}
 
@@ -913,7 +913,7 @@ def _validate_complete_time_rule(
             normalize_time(data.get(CONF_RULE_TRIGGER))
         else:
             int(data.get(CONF_RULE_TRIGGER_OFFSET, 0))
-    except (TypeError, ValueError):
+    except (OverflowError, TypeError, ValueError):
         return "rule_time_invalid"
     return None
 
@@ -951,4 +951,3 @@ def _action_summary(action: str, language: str = "en") -> str:
     if action == RULE_ACTION_OPEN:
         return "Hochfahren" if is_german else "Open"
     return "Runterfahren" if is_german else "Close"
-

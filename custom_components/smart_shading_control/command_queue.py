@@ -1,4 +1,4 @@
-"""Serialized, coalescing command queue for physical cover providers."""
+"""Room-paced command starts with independent, serialized cover workers."""
 
 from __future__ import annotations
 
@@ -77,7 +77,7 @@ class _QueuedCommand:
 
 
 class SmartShadingCommandQueue:
-    """Serialize provider calls and discard obsolete queued targets.
+    """Pace room command starts without waiting for other covers to finish.
 
     Commands are coalesced per physical cover and command channel. A newer
     command replaces an older command which has not started only when its
@@ -85,7 +85,10 @@ class SmartShadingCommandQueue:
     commands therefore invalidate queued movement targets and cannot themselves
     be displaced by a later normal automatic target. A manual STOP remains more
     urgent than asset protection, while a manual position target cannot displace
-    a queued weather-safety movement.
+    a queued weather-safety movement. Each physical cover has its own worker
+    and spacing clock. A shared dispatch lock spaces service starts across
+    the room (one second by default), but is released before awaiting the
+    provider response, so a slow device cannot stall the rest of its room.
     """
 
     def __init__(
@@ -101,13 +104,15 @@ class SmartShadingCommandQueue:
         self._command_timeout_seconds = max(1.0, float(command_timeout_seconds))
         self._owner_id = str(owner_id or "unknown")
         self._condition = asyncio.Condition()
-        self._heap: list[_QueuedCommand] = []
+        self._dispatch_lock = asyncio.Lock()
+        self._last_dispatch_monotonic: float | None = None
+        self._heaps: dict[str, list[_QueuedCommand]] = {}
         self._pending: dict[tuple[str, str], _QueuedCommand] = {}
         self._sequence = 0
-        self._worker: asyncio.Task[None] | None = None
+        self._workers: dict[str, asyncio.Task[None]] = {}
         self._closing = False
-        self._last_call_monotonic: float | None = None
-        self._active: _QueuedCommand | None = None
+        self._last_call_monotonic: dict[str, float] = {}
+        self._active: dict[str, _QueuedCommand] = {}
         self._completed = 0
         self._failed = 0
         self._superseded = 0
@@ -223,9 +228,10 @@ class SmartShadingCommandQueue:
                     on_finished=on_finished,
                 )
                 self._pending[key] = item
-                heapq.heappush(self._heap, item)
+                heapq.heappush(self._heaps.setdefault(entity_id, []), item)
                 self._ensure_worker_locked()
-                self._condition.notify()
+                # Workers for other covers may also be waiting on this lock.
+                self._condition.notify_all()
         self._notify()
 
         if blocked_result is not None:
@@ -242,21 +248,24 @@ class SmartShadingCommandQueue:
 
     def snapshot(self) -> dict[str, Any]:
         """Return a compact queue state for diagnostics and entities."""
-        active = self._active
+        active_items = [
+            {
+                "entity_id": item.entity_id,
+                "command_type": item.command_type,
+                "service": item.service,
+                "priority": item.priority,
+            }
+            for item in sorted(self._active.values(), key=lambda item: item.sequence)
+        ]
         last = self._last_result
         return {
-            "busy": active is not None or bool(self._pending),
+            "busy": bool(active_items) or bool(self._pending),
             "depth": len(self._pending),
-            "active": (
-                {
-                    "entity_id": active.entity_id,
-                    "command_type": active.command_type,
-                    "service": active.service,
-                    "priority": active.priority,
-                }
-                if active is not None
-                else None
-            ),
+            # Retain the existing diagnostic field for clients which expect
+            # one object, and expose the complete concurrent dispatch state.
+            "active": active_items[0] if active_items else None,
+            "active_commands": active_items,
+            "active_count": len(active_items),
             "completed": self._completed,
             "failed": self._failed,
             "superseded": self._superseded,
@@ -281,7 +290,7 @@ class SmartShadingCommandQueue:
         }
 
     async def async_shutdown(self) -> None:
-        """Stop the worker and resolve any queued callers safely."""
+        """Stop every cover worker and resolve queued callers safely."""
         self._closing = True
         async with self._condition:
             for item in self._pending.values():
@@ -297,18 +306,19 @@ class SmartShadingCommandQueue:
                         )
                     )
             self._pending.clear()
-            self._heap.clear()
+            self._heaps.clear()
             self._condition.notify_all()
         self._notify()
-        active = self._active
-        if self._worker is not None:
-            self._worker.cancel()
-            try:
-                await self._worker
-            except asyncio.CancelledError:
-                pass
-            self._worker = None
-        if active is not None and not active.finished:
+        active_items = tuple(self._active.values())
+        workers = tuple(self._workers.values())
+        for worker in workers:
+            worker.cancel()
+        if workers:
+            await asyncio.gather(*workers, return_exceptions=True)
+        self._workers.clear()
+        for active in active_items:
+            if active.finished:
+                continue
             result = CommandResult(
                 success=False,
                 entity_id=active.entity_id,
@@ -320,37 +330,57 @@ class SmartShadingCommandQueue:
                 skipped_reason="queue_closed",
             )
             self._finish_item(active, result)
-        self._active = None
+        self._active.clear()
+        self._last_call_monotonic.clear()
+        self._last_dispatch_monotonic = None
+        self._notify()
         self._listeners.clear()
 
     def _ensure_worker_locked(self) -> None:
-        if self._worker is None or self._worker.done():
-            self._worker = self.hass.async_create_background_task(
-                self._async_worker(),
-                f"Smart Shading Control command queue ({self._owner_id})",
-            )
+        for entity_id in self._heaps:
+            worker = self._workers.get(entity_id)
+            if worker is None or worker.done():
+                self._workers[entity_id] = self.hass.async_create_background_task(
+                    self._async_worker(entity_id),
+                    f"Smart Shading Control command queue ({self._owner_id}, {entity_id})",
+                )
 
-    async def _async_worker(self) -> None:
-        while not self._closing:
-            await self._async_wait_for_spacing()
-            item = await self._async_next_item()
-            if item is None:
-                return
-            await self._async_execute(item)
+    async def _async_worker(self, entity_id: str) -> None:
+        try:
+            while not self._closing:
+                await self._async_wait_for_spacing(entity_id)
+                item = await self._async_next_item(entity_id)
+                if item is None:
+                    return
+                await self._async_execute(item)
+        except asyncio.CancelledError:
+            # A provider may cancel its own service handler. If this also
+            # stops the worker, do not leave other waiters stranded forever.
+            # Normal shutdown has already resolved all queued futures.
+            if not self._closing:
+                async with self._condition:
+                    for key, pending in tuple(self._pending.items()):
+                        if key[0] == entity_id:
+                            self._pending.pop(key, None)
+                            self._finish_skipped(pending, "worker_cancelled")
+                    self._heaps.pop(entity_id, None)
+            raise
 
-    async def _async_wait_for_spacing(self) -> None:
+    async def _async_wait_for_spacing(self, entity_id: str) -> None:
         """Wait before selecting the next item so new safety work can preempt."""
-        if self._last_call_monotonic is None:
+        last_call = self._last_call_monotonic.get(entity_id)
+        if last_call is None:
             return
-        remaining = self._spacing_seconds - (monotonic() - self._last_call_monotonic)
+        remaining = self._spacing_seconds - (monotonic() - last_call)
         if remaining > 0:
             await asyncio.sleep(remaining)
 
-    async def _async_next_item(self) -> _QueuedCommand | None:
+    async def _async_next_item(self, entity_id: str) -> _QueuedCommand | None:
         async with self._condition:
             while not self._closing:
-                while self._heap:
-                    candidate = heapq.heappop(self._heap)
+                heap = self._heaps.get(entity_id, [])
+                while heap:
+                    candidate = heapq.heappop(heap)
                     key = (candidate.entity_id, candidate.coalesce_key)
                     if self._pending.get(key) is not candidate:
                         continue
@@ -379,15 +409,128 @@ class SmartShadingCommandQueue:
                 await self._async_finish_skipped(item, "obsolete")
                 return
 
+        # Only dispatch admission is serialized across the room. Keep the
+        # provider await outside this lock: starts are paced, slow responses
+        # remain independent. Pending commands stay coalescible while waiting.
+        async with self._dispatch_lock:
+            if self._last_dispatch_monotonic is not None:
+                remaining = self._spacing_seconds - (
+                    monotonic() - self._last_dispatch_monotonic
+                )
+                if remaining > 0:
+                    await asyncio.sleep(remaining)
+            if not await self._async_start_item(item):
+                return
+            self._last_dispatch_monotonic = monotonic()
+
+        issued_at = item.issued_at
+        self._notify()
+        try:
+            async with asyncio.timeout(self._command_timeout_seconds):
+                await self.hass.services.async_call(
+                    "cover",
+                    item.service,
+                    item.service_data,
+                    target={ATTR_ENTITY_ID: item.entity_id},
+                    blocking=True,
+                    context=item.context,
+                )
+        except asyncio.CancelledError:
+            self._last_call_monotonic[item.entity_id] = monotonic()
+            worker = asyncio.current_task()
+            if not self._closing and worker is not None and not worker.cancelling():
+                # A cancelled provider handler is a failed command, not a
+                # cancellation of this queue worker. Report it for controller
+                # backoff/retry and continue with the next queued command.
+                self._failed += 1
+                result = CommandResult(
+                    success=False,
+                    entity_id=item.entity_id,
+                    command_type=item.command_type,
+                    service=item.service,
+                    issued_at=issued_at,
+                    completed_at=dt_util.utcnow(),
+                    context_id=item.context.id,
+                    error=RuntimeError("Cover provider service call was cancelled"),
+                )
+            else:
+                result = CommandResult(
+                    success=False,
+                    entity_id=item.entity_id,
+                    command_type=item.command_type,
+                    service=item.service,
+                    issued_at=issued_at,
+                    completed_at=dt_util.utcnow(),
+                    context_id=item.context.id,
+                    skipped_reason=(
+                        "queue_closed" if self._closing else "worker_cancelled"
+                    ),
+                )
+                self._finish_item(item, result)
+                raise
+        except Exception as err:  # noqa: BLE001
+            self._last_call_monotonic[item.entity_id] = monotonic()
+            self._failed += 1
+            result = CommandResult(
+                success=False,
+                entity_id=item.entity_id,
+                command_type=item.command_type,
+                service=item.service,
+                issued_at=issued_at,
+                completed_at=dt_util.utcnow(),
+                context_id=item.context.id,
+                error=err,
+            )
+        else:
+            self._last_call_monotonic[item.entity_id] = monotonic()
+            self._completed += 1
+            result = CommandResult(
+                success=True,
+                entity_id=item.entity_id,
+                command_type=item.command_type,
+                service=item.service,
+                issued_at=issued_at,
+                completed_at=dt_util.utcnow(),
+                context_id=item.context.id,
+            )
+        finally:
+            if "result" in locals():
+                self._finish_item(item, result)
+            self._active.pop(item.entity_id, None)
+            self._notify()
+
+    async def _async_start_item(self, item: _QueuedCommand) -> bool:
+        """Revalidate and mark one item while the room dispatch lock is held."""
         key = (item.entity_id, item.coalesce_key)
         async with self._condition:
             # The item may have been replaced after it was selected but before
             # the provider call started. In that case the newer target wins.
-            if self._pending.get(key) is not item or item.future.done():
-                return
+            if (
+                self._closing
+                or self._pending.get(key) is not item
+                or item.future.done()
+            ):
+                return False
+            # Pacing and acquiring the lock can yield after the first check.
+            # Recheck immediately before starting to honor a new interlock,
+            # manual override or controller evaluation in that window.
+            if item.is_valid is not None:
+                try:
+                    valid = item.is_valid()
+                except Exception:
+                    _LOGGER.exception(
+                        "Command validity callback failed for %s", item.entity_id
+                    )
+                    self._pending.pop(key, None)
+                    self._finish_skipped(item, "validation_error")
+                    return False
+                if not valid:
+                    self._pending.pop(key, None)
+                    self._finish_skipped(item, "obsolete")
+                    return False
             self._pending.pop(key, None)
             item.started = True
-            self._active = item
+            self._active[item.entity_id] = item
 
         issued_at = dt_util.utcnow()
         item.issued_at = issued_at
@@ -411,67 +554,11 @@ class SmartShadingCommandQueue:
                     skipped_reason="start_callback_error",
                 )
                 self._finish_item(item, result)
-                self._active = None
+                self._active.pop(item.entity_id, None)
                 self._notify()
-                return
+                return False
 
-        self._notify()
-        try:
-            async with asyncio.timeout(self._command_timeout_seconds):
-                await self.hass.services.async_call(
-                    "cover",
-                    item.service,
-                    item.service_data,
-                    target={ATTR_ENTITY_ID: item.entity_id},
-                    blocking=True,
-                    context=item.context,
-                )
-        except asyncio.CancelledError:
-            self._last_call_monotonic = monotonic()
-            result = CommandResult(
-                success=False,
-                entity_id=item.entity_id,
-                command_type=item.command_type,
-                service=item.service,
-                issued_at=issued_at,
-                completed_at=dt_util.utcnow(),
-                context_id=item.context.id,
-                skipped_reason=(
-                    "queue_closed" if self._closing else "worker_cancelled"
-                ),
-            )
-            self._finish_item(item, result)
-            raise
-        except Exception as err:  # noqa: BLE001
-            self._last_call_monotonic = monotonic()
-            self._failed += 1
-            result = CommandResult(
-                success=False,
-                entity_id=item.entity_id,
-                command_type=item.command_type,
-                service=item.service,
-                issued_at=issued_at,
-                completed_at=dt_util.utcnow(),
-                context_id=item.context.id,
-                error=err,
-            )
-        else:
-            self._last_call_monotonic = monotonic()
-            self._completed += 1
-            result = CommandResult(
-                success=True,
-                entity_id=item.entity_id,
-                command_type=item.command_type,
-                service=item.service,
-                issued_at=issued_at,
-                completed_at=dt_util.utcnow(),
-                context_id=item.context.id,
-            )
-        finally:
-            if "result" in locals():
-                self._finish_item(item, result)
-            self._active = None
-            self._notify()
+        return True
 
     def _finish_item(self, item: _QueuedCommand, result: CommandResult) -> None:
         """Finalize a started item even when its submitter was cancelled."""
@@ -515,9 +602,9 @@ class SmartShadingCommandQueue:
 def get_command_queue(hass: HomeAssistant, owner_id: str) -> SmartShadingCommandQueue:
     """Return the independent command queue for one room controller.
 
-    Each room owns its own worker. A slow or failing provider command in one
-    room therefore cannot block, supersede or otherwise delay commands that
-    belong to another room. Covers are already exclusively claimed per room.
+    Each room owns its queue, with independent workers for its physical covers.
+    A slow or failing provider command cannot block a different cover, even in
+    the same room. Covers are already exclusively claimed per room.
     """
     runtime = hass.data.setdefault(DOMAIN, {})
     queues = runtime.setdefault(COMMAND_QUEUES_KEY, {})

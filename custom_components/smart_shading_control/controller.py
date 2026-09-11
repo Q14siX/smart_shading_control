@@ -170,15 +170,20 @@ from .runtime_state import (
     restore_recent_target_commands,
     restore_temperature_samples,
 )
-from .schedule import normalize_boolean, resolve_rule_actions, resolve_rule_states
+from .schedule import (
+    normalize_boolean,
+    resolve_persistent_rule_closures,
+    resolve_rule_actions,
+    resolve_rule_states,
+)
 from .schedule_conflicts import detect_rule_conflicts
+from .solar import FacadeHeatAssessment, assess_facade_heat
 from .state_helpers import (
     attribute_float,
     position_from_state,
     temperature_to_celsius,
     tilt_position_from_state,
 )
-from .solar import FacadeHeatAssessment, assess_facade_heat
 from .storage_helpers import async_load_persistent_store
 from .weather_runtime import WeatherRuntime
 
@@ -345,6 +350,7 @@ class SmartShadingController:
         self._dispatching_command_contexts: dict[str, tuple[str, str]] = {}
         self._manual_detection_suppressed_until: dict[str, datetime] = {}
         self._manual_overrides: dict[str, datetime] = {}
+        self._override_resume_covers: set[str] = set()
         self._manual_override_details: dict[str, dict[str, Any]] = {}
         self._temperature_samples: deque[tuple[datetime, float]] = deque(maxlen=48)
         self._previous_level: dict[str, str] = {}
@@ -465,7 +471,7 @@ class SmartShadingController:
                 continue
             try:
                 global_value = int(global_values.get(key, POSITION_DEFAULTS[key]))
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 global_value = int(POSITION_DEFAULTS[key])
             result[key] = max(0, min(100, global_value))
         return result
@@ -546,8 +552,7 @@ class SmartShadingController:
         contact_mapping = config.get(CONF_COVER_CONTACTS) or {}
         if isinstance(contact_mapping, dict):
             entities.extend(str(value) for value in contact_mapping.values() if value)
-        if config.get(CONF_SUN_ENTITY):
-            entities.append(str(config[CONF_SUN_ENTITY]))
+        entities.append(str(config.get(CONF_SUN_ENTITY) or "sun.sun"))
         return list(dict.fromkeys(entities))
 
     def _room_repair_entities(self) -> list[str]:
@@ -794,9 +799,6 @@ class SmartShadingController:
         if active_operations:
             await asyncio.gather(*active_operations, return_exceptions=True)
             self._active_operations.difference_update(active_operations)
-        async with self._evaluation_lock:
-            self._evaluation_pending = False
-            self._evaluation_force = False
         pending_entry_tasks = [
             task
             for task in self._entry_tasks
@@ -807,6 +809,13 @@ class SmartShadingController:
         if pending_entry_tasks:
             await asyncio.gather(*pending_entry_tasks, return_exceptions=True)
             self._entry_tasks.difference_update(pending_entry_tasks)
+        async with self._evaluation_lock:
+            self._evaluation_pending = False
+            self._evaluation_force = False
+        # Provider workers outlive cancelled submitters. Drain their completion
+        # callbacks before persisting, so aborted commands leave no stale intent
+        # that could suppress manual detection after a reload.
+        await self._command_queue.async_shutdown()
         if not self._prepared:
             # A failed Store restore must never be followed by writing the
             # controller's empty/default dictionaries over the only persistent
@@ -1731,6 +1740,14 @@ class SmartShadingController:
             if expiry > now
         }
         expired_override_covers = set(self._manual_overrides) - set(active_overrides)
+        if expired_override_covers:
+            # Keep the one-time release intent until a fresh target is reached
+            # or accepted. A provider failure or an invalidated evaluation must
+            # not make the cover wait for the ordinary movement cooldown.
+            self._override_resume_covers.update(expired_override_covers)
+            self._input_revision += 1
+            if self._evaluation_lock.locked():
+                self._evaluation_pending = True
         self._manual_overrides = active_overrides
         self.data["manual_overrides"] = {
             entity: expiry.isoformat()
@@ -1887,6 +1904,9 @@ class SmartShadingController:
             for entity_id, _channel in self._dispatching_command_contexts.values()
         }
         return {
+            "override_resume_covers": sorted(
+                self._override_resume_covers.intersection(self.all_covers)
+            ),
             "last_move_at": {
                 entity: timestamp.isoformat()
                 for entity, timestamp in self._last_move.items()
@@ -2044,6 +2064,7 @@ class SmartShadingController:
 
         for field in (
             "time_rule_manual_releases",
+            "override_resume_covers",
             "scheduled_close_covers",
             "pending_time_rule_closes",
             "executed_time_rule_occurrences",
@@ -2234,6 +2255,10 @@ class SmartShadingController:
                 if parsed.tzinfo is None:
                     parsed = parsed.replace(tzinfo=dt_util.UTC)
                 self._last_time_rule_check = dt_util.as_utc(parsed)
+        self._override_resume_covers = {
+            entity for entity in stored.get("override_resume_covers", [])
+            if entity in self.all_covers
+        }
         raw_releases = stored.get("time_rule_manual_releases")
         if isinstance(raw_releases, list):
             self._time_rule_manual_releases = {
@@ -2485,7 +2510,7 @@ class SmartShadingController:
                 )
                 self._last_control_state_save = dt_util.utcnow()
             except Exception:
-                _LOGGER.debug("Could not persist controller state", exc_info=True)
+                _LOGGER.warning("Could not persist controller state", exc_info=True)
 
     async def _async_restore_manual_overrides(self) -> None:
         """Restore each non-expired manual override from its absolute expiry."""
@@ -2521,6 +2546,8 @@ class SmartShadingController:
                     )
                 if expiry > now:
                     restored[entity_id] = expiry
+                else:
+                    self._override_resume_covers.add(entity_id)
 
         self._manual_overrides = restored
         self._manual_override_details = {
@@ -2587,7 +2614,7 @@ class SmartShadingController:
             try:
                 await self._override_store.async_save(snapshot)
             except Exception:
-                _LOGGER.debug("Could not persist manual overrides", exc_info=True)
+                _LOGGER.warning("Could not persist manual overrides", exc_info=True)
 
     @callback
     def _schedule_manual_override_expiry(self) -> None:
@@ -2617,11 +2644,13 @@ class SmartShadingController:
                 dt_util.utcnow(),
                 schedule_persistence=False,
             )
+            # Arm the next per-cover deadline before persistence yields. A
+            # slow storage write must not hide another cover's expiry.
+            self._schedule_manual_override_expiry()
             if previous != self._manual_overrides:
                 self._override_revision += 1
                 await self._async_save_manual_overrides(self._override_revision)
                 await self.async_save_control_state()
-            self._schedule_manual_override_expiry()
             if previous != self._manual_overrides:
                 await self.async_evaluate()
 
@@ -2692,21 +2721,24 @@ class SmartShadingController:
             if self._pending_time_rule_close_ready_at.pop(cover, None) is not None:
                 state_changed = True
 
+        async def release_cover(cover: str) -> None:
+            if cover not in self._scheduled_close_covers:
+                return
             # Reverse only a movement or position that was created by the
             # automatic night rule. Manual commands and daytime shading must
             # never be redirected by a contact event.
             origin = self._last_command_origin.get(cover)
             if origin is None or origin[0] != "time_rule_close":
-                continue
+                return
             cover_state = self.hass.states.get(cover)
             if cover_state is None or cover_state.state in {
                 STATE_UNKNOWN,
                 STATE_UNAVAILABLE,
             }:
-                continue
+                return
             current = self._position_from_state(cover_state)
             if current is not None and abs(current - open_target) <= POSITION_TOLERANCE:
-                continue
+                return
             self._manual_detection_suppressed_until[cover] = (
                 now + timedelta(seconds=COMMAND_GRACE_SECONDS)
             )
@@ -2721,6 +2753,19 @@ class SmartShadingController:
                 priority=PRIORITY_EMERGENCY,
                 origin="time_rule_contact_release",
             )
+
+        outcomes = await asyncio.gather(
+            *(release_cover(cover) for cover in covers),
+            return_exceptions=True,
+        )
+        for cover, outcome in zip(covers, outcomes, strict=True):
+            if isinstance(outcome, asyncio.CancelledError):
+                raise outcome
+            if isinstance(outcome, Exception):
+                _LOGGER.error(
+                    "Contact safety failed for %s", cover,
+                    exc_info=(type(outcome), outcome, outcome.__traceback__),
+                )
 
         self._schedule_time_rule_close_retry()
         if state_changed:
@@ -2763,7 +2808,7 @@ class SmartShadingController:
 
         if not command_is_valid():
             return False
-        supported = int(state.attributes.get("supported_features", 0))
+        supported = self._supported_features_from_state(state)
         if not supported & int(CoverEntityFeature.STOP):
             create_issue(
                 self.hass,
@@ -2891,7 +2936,7 @@ class SmartShadingController:
 
     def _is_opening_request(self, state: State | None, requested: int) -> bool:
         """Return the semantic movement direction for one physical cover."""
-        supported = int(state.attributes.get("supported_features", 0)) if state else 0
+        supported = self._supported_features_from_state(state) if state else 0
         return is_opening_target(
             requested,
             self._position_from_state(state),
@@ -2951,6 +2996,12 @@ class SmartShadingController:
 
     def _reset_provider_recovery_state(self) -> None:
         """Clear room-wide retry state after a fully successful command cycle."""
+        if any(
+            health.get("state") == "degraded"
+            for health in self._provider_health_by_cover.values()
+        ):
+            # A success on B must not cancel the outstanding retry for A.
+            return
         retry_was_active = bool(
             self._command_retry_cancel is not None
             or self._command_retry_at is not None
@@ -3027,7 +3078,7 @@ class SmartShadingController:
 
         # Invalidate automatic plans once, but keep a separate generation for
         # this user transaction. Ordinary sensor/minute updates must not abort a
-        # serial multi-cover command after its first item.
+        # multi-cover command after its first item.
         self._input_revision += 1
         self._manual_command_revision += 1
         command_revision = self._manual_command_revision
@@ -3083,12 +3134,12 @@ class SmartShadingController:
             self._schedule_manual_override_expiry()
             await self.async_save_control_state()
 
-        for entity_id in selected_covers:
+        async def apply_manual(entity_id: str) -> None:
             if (
                 not self._started
                 or command_revision != self._manual_command_revision
             ):
-                break
+                return
             state = self.hass.states.get(entity_id)
             if state is None or state.state in {STATE_UNKNOWN, STATE_UNAVAILABLE}:
                 results[entity_id] = {
@@ -3097,7 +3148,7 @@ class SmartShadingController:
                     "safety_forced": False,
                     "result": "unavailable",
                 }
-                continue
+                return
 
             opening_requested = self._is_opening_request(state, target)
             safety_position = self._active_weather_safe_position()
@@ -3107,7 +3158,7 @@ class SmartShadingController:
                 if safety_applies and safety_position is not None
                 else target
             )
-            supported = int(state.attributes.get("supported_features", 0))
+            supported = self._supported_features_from_state(state)
             effective_target = protected_target
             if not supported & int(CoverEntityFeature.SET_POSITION):
                 effective_target = binary_cover_target(
@@ -3128,7 +3179,7 @@ class SmartShadingController:
                     "result": "already_at_target",
                 }
                 noop_covers.append(entity_id)
-                continue
+                return
 
             accepted = await self._async_move_cover(
                 entity_id,
@@ -3159,6 +3210,20 @@ class SmartShadingController:
                 dry_run_covers.append(entity_id)
             elif accepted:
                 successful.append(entity_id)
+
+        outcomes = await asyncio.gather(
+            *(apply_manual(entity_id) for entity_id in selected_covers),
+            return_exceptions=True,
+        )
+        for entity_id, outcome in zip(selected_covers, outcomes, strict=True):
+            if isinstance(outcome, asyncio.CancelledError):
+                raise outcome
+            if isinstance(outcome, Exception):
+                _LOGGER.error(
+                    "Cover operation failed for %s", entity_id,
+                    exc_info=(type(outcome), outcome, outcome.__traceback__),
+                )
+                results[entity_id] = {"result": "failed"}
 
         retained_covers = set(successful) | set(noop_covers)
         manual_state_changed = False
@@ -3350,16 +3415,16 @@ class SmartShadingController:
             await self.async_save_control_state()
 
         results: dict[str, str] = {}
-        for entity_id in selected_covers:
+        async def stop_cover(entity_id: str) -> None:
             if command_revision != self._manual_command_revision:
-                break
+                return
             state = states[entity_id]
             if state is None or state.state in {STATE_UNKNOWN, STATE_UNAVAILABLE}:
                 results[entity_id] = "unavailable"
-                continue
+                return
             if entity_id not in needs_stop:
                 results[entity_id] = "held"
-                continue
+                return
             accepted = await self._async_stop_cover(
                 entity_id,
                 state,
@@ -3369,6 +3434,20 @@ class SmartShadingController:
             results[entity_id] = (
                 "dry_run" if dry_run else "accepted" if accepted else "failed"
             )
+
+        outcomes = await asyncio.gather(
+            *(stop_cover(entity_id) for entity_id in selected_covers),
+            return_exceptions=True,
+        )
+        for entity_id, outcome in zip(selected_covers, outcomes, strict=True):
+            if isinstance(outcome, asyncio.CancelledError):
+                raise outcome
+            if isinstance(outcome, Exception):
+                _LOGGER.error(
+                    "Cover operation failed for %s", entity_id,
+                    exc_info=(type(outcome), outcome, outcome.__traceback__),
+                )
+                results[entity_id] = "failed"
 
         if pending_changed or not dry_run:
             await self.async_save_control_state()
@@ -3520,14 +3599,24 @@ class SmartShadingController:
             and (full_reconciliation or cover in availability_covers)
         }
 
+    def _evaluation_invalidated(self, revision: int, force: bool) -> bool:
+        """Discard an obsolete plan without consuming newer manual intent."""
+        if not self._started:
+            return True
+        if revision == self._input_revision:
+            return False
+        self._evaluation_pending = True
+        self._evaluation_force = self._evaluation_force or force
+        return True
+
     async def _async_evaluate_locked(self, force: bool) -> None:
         """Evaluate one coherent snapshot while the controller lock is held."""
         now = dt_util.utcnow()
-        evaluation_revision = self._input_revision
         self._transient_command_failure = False
         self._provider_command_attempted = False
         self._provider_command_succeeded = False
         self._purge_expired(now)
+        evaluation_revision = self._input_revision
         runtime_state_before = self._runtime_storage_state()
         config = self.config
         all_covers = self.all_covers
@@ -3547,6 +3636,8 @@ class SmartShadingController:
         self.data["commanded_tilt_positions"] = {}
         self.data["would_command_tilt_positions"] = {}
         await self._async_refresh_forecast_if_needed(now)
+        if self._evaluation_invalidated(evaluation_revision, force):
+            return
 
         room_temperature = self._temperature_state(
             config.get(CONF_ROOM_TEMP_SENSOR)
@@ -3679,6 +3770,8 @@ class SmartShadingController:
             str(workday_entity) if workday_entity else None,
             is_workday,
         )
+        if self._evaluation_invalidated(evaluation_revision, force):
+            return
         workday_dependent = any(
             str(rule.get(CONF_RULE_DAY_TYPE) or DAY_TYPE_ANY) != DAY_TYPE_ANY
             for rule in combined_rules
@@ -3781,20 +3874,16 @@ class SmartShadingController:
                 control_state_changed = True
         if control_state_changed:
             await self.async_save_control_state()
+            if self._evaluation_invalidated(evaluation_revision, force):
+                return
 
         previous_scheduled_close_covers = set(self._scheduled_close_covers)
-        if workday_data_ready:
-            scheduled_close_covers = {
-                cover
-                for cover, action in time_rule_states.items()
-                if action == RULE_ACTION_CLOSE
-                and cover not in self._time_rule_manual_releases
-            }
-        else:
-            # An incomplete Workday history must not undo a previously active
-            # night closure. Fresh resolvable events are still applied below and
-            # the full state is reconciled as soon as Workday recovers.
-            scheduled_close_covers = set(previous_scheduled_close_covers)
+        scheduled_close_covers = resolve_persistent_rule_closures(
+            combined_rules,
+            previous_closed_covers=previous_scheduled_close_covers,
+            resolved_states=time_rule_states if workday_data_ready else {},
+            all_covers=all_covers,
+        ) - self._time_rule_manual_releases
         for cover, action in time_rule_actions.items():
             if action == RULE_ACTION_CLOSE:
                 scheduled_close_covers.add(cover)
@@ -3852,7 +3941,7 @@ class SmartShadingController:
                     state = self.hass.states.get(cover)
                     current = self._position_from_state(state)
                     supported = (
-                        int(state.attributes.get("supported_features", 0))
+                        self._supported_features_from_state(state)
                         if state is not None
                         else 0
                     )
@@ -3879,6 +3968,8 @@ class SmartShadingController:
                         reconciliation_pending_changed = True
                 if reconciliation_pending_changed:
                     await self.async_save_control_state()
+                    if self._evaluation_invalidated(evaluation_revision, force):
+                        return
             # Consume only the recovery edges evaluated from this unchanged
             # input snapshot. A new availability transition during an awaited
             # provider/Store operation invalidates the revision and must survive
@@ -3898,6 +3989,8 @@ class SmartShadingController:
             for cover in superseded_open_retries:
                 self._pending_time_rule_opens.pop(cover, None)
             await self.async_save_control_state()
+            if self._evaluation_invalidated(evaluation_revision, force):
+                return
         pending_open_covers = set(self._pending_time_rule_opens)
         time_rule_targets.update(
             {
@@ -3959,6 +4052,8 @@ class SmartShadingController:
         self._schedule_time_rule_close_retry()
         if pending_close_state_changed:
             await self.async_save_control_state()
+            if self._evaluation_invalidated(evaluation_revision, force):
+                return
 
         targets: dict[str, int] = {}
         statuses: list[str] = []
@@ -4019,6 +4114,8 @@ class SmartShadingController:
                 )
                 if control_state_changed:
                     await self.async_save_control_state()
+                    if self._evaluation_invalidated(evaluation_revision, force):
+                        return
 
             if time_rule_targets:
                 targets.update(time_rule_targets)
@@ -4171,6 +4268,8 @@ class SmartShadingController:
         self._schedule_time_rule_close_retry()
         if pending_close_state_changed:
             await self.async_save_control_state()
+            if self._evaluation_invalidated(evaluation_revision, force):
+                return
 
         if blocked_night_close_covers:
             status = STATUS_CONTACT_PROTECTION
@@ -4233,10 +4332,12 @@ class SmartShadingController:
                 # A newly triggered rule may bypass the normal movement
                 # throttle. Restored pending/startup reconciliation is a
                 # recalculation and must retain the original cooldown.
-                forced_covers=fresh_rule_event_covers,
+                forced_covers=fresh_rule_event_covers | self._override_resume_covers,
                 time_rule_close_covers=allowed_scheduled_close_covers,
                 evaluation_revision=evaluation_revision,
             )
+            if self._evaluation_invalidated(evaluation_revision, force):
+                return
 
         pending_open_completed = False
         if (
@@ -4250,7 +4351,7 @@ class SmartShadingController:
                 state = self.hass.states.get(cover)
                 current = self._position_from_state(state)
                 supported = (
-                    int(state.attributes.get("supported_features", 0))
+                    self._supported_features_from_state(state)
                     if state is not None
                     else 0
                 )
@@ -4274,6 +4375,8 @@ class SmartShadingController:
                     pending_open_completed = True
             if pending_open_completed:
                 await self.async_save_control_state()
+                if self._evaluation_invalidated(evaluation_revision, force):
+                    return
 
         if (
             not self._transient_command_failure
@@ -4441,6 +4544,8 @@ class SmartShadingController:
         )
         if runtime_state_before != self._runtime_storage_state():
             await self.async_save_control_state()
+            if self._evaluation_invalidated(evaluation_revision, force):
+                return
         self._publish()
 
     def _dynamic_targets(
@@ -4523,7 +4628,7 @@ class SmartShadingController:
         forced_rule_covers = forced_covers or set()
         scheduled_close_origins = time_rule_close_covers or set()
 
-        for entity_id, raw_target in targets.items():
+        async def apply_target(entity_id: str, raw_target: int) -> None:
             if (
                 not self._started
                 or not self.enabled
@@ -4533,14 +4638,14 @@ class SmartShadingController:
                     and evaluation_revision != self._input_revision
                 )
             ):
-                break
+                return
             requested_target = int(clamp(float(raw_target), 0.0, 100.0))
             state = self.hass.states.get(entity_id)
             if state is None or state.state in {STATE_UNAVAILABLE, STATE_UNKNOWN}:
-                continue
+                return
 
             tilt_source_targets[entity_id] = requested_target
-            supported = int(state.attributes.get("supported_features", 0))
+            supported = self._supported_features_from_state(state)
             supports_position = bool(
                 supported & int(CoverEntityFeature.SET_POSITION)
             )
@@ -4553,7 +4658,8 @@ class SmartShadingController:
                 # Compare the requested percentage before binary quantization.
                 # Otherwise an already reached 40-percent target could be
                 # transformed into OPEN and trigger an unnecessary movement.
-                continue
+                self._override_resume_covers.discard(entity_id)
+                return
             opening_requested = self._is_opening_request(state, requested_target)
             target = (
                 requested_target
@@ -4571,7 +4677,7 @@ class SmartShadingController:
                 and (now - last_command[1]).total_seconds()
                 <= COMMAND_GRACE_SECONDS
             ):
-                continue
+                return
 
             cover_force = (
                 (force and not self._startup_time_rule_reconciliation)
@@ -4580,23 +4686,24 @@ class SmartShadingController:
             )
             last_move = self._last_move.get(entity_id)
             if current is not None and abs(current - target) <= POSITION_TOLERANCE:
-                continue
+                self._override_resume_covers.discard(entity_id)
+                return
             if state.state in {"opening", "closing"} and not cover_force:
                 # Do not reverse or retarget an in-progress physical/provider
                 # movement merely because restart reconciliation or a periodic
                 # evaluation now sees a numeric intermediate position. Fresh
                 # time-rule events and safety actions retain their explicit
                 # force semantics; ordinary automation waits for the stop edge.
-                continue
+                return
             if not cover_force:
                 if current is not None and abs(current - target) < min_change:
-                    continue
+                    return
                 if last_move and now - last_move < min_interval:
-                    continue
+                    return
 
             if dry_run:
                 commanded_targets[entity_id] = target
-                continue
+                return
             if await self._async_move_cover(
                 entity_id,
                 state,
@@ -4619,11 +4726,25 @@ class SmartShadingController:
                 ),
             ):
                 commanded_targets[entity_id] = target
-                self._last_move[entity_id] = now
+                self._override_resume_covers.discard(entity_id)
             else:
                 # Do not apply a tilt profile for a vertical target that the
                 # provider rejected. That would leave the cover in a mixed,
                 # diagnostically misleading state.
+                tilt_source_targets.pop(entity_id, None)
+
+        outcomes = await asyncio.gather(
+            *(apply_target(entity_id, raw_target) for entity_id, raw_target in targets.items()),
+            return_exceptions=True,
+        )
+        for entity_id, outcome in zip(targets, outcomes, strict=True):
+            if isinstance(outcome, asyncio.CancelledError):
+                raise outcome
+            if isinstance(outcome, Exception):
+                _LOGGER.error(
+                    "Cover operation failed for %s", entity_id,
+                    exc_info=(type(outcome), outcome, outcome.__traceback__),
+                )
                 tilt_source_targets.pop(entity_id, None)
 
         if commanded_targets and not dry_run:
@@ -4667,9 +4788,9 @@ class SmartShadingController:
                 )
             )
 
-        for entity_id, position_target in position_targets.items():
+        async def apply_tilt(entity_id: str, position_target: int) -> None:
             if not evaluation_is_valid():
-                break
+                return
             cover_is_safety_forced = entity_id in safety_covers
 
             def command_is_valid(
@@ -4686,6 +4807,11 @@ class SmartShadingController:
                 retry_active = bool(
                     self._command_retry_at is not None
                     and self._command_retry_at > current_time
+                    and (
+                        not self._provider_health_by_cover
+                        or self._provider_health_by_cover.get(cover_entity, {}).get("state")
+                        == "degraded"
+                    )
                 )
                 return bool(
                     evaluation_is_valid()
@@ -4697,11 +4823,11 @@ class SmartShadingController:
             # never reach the provider. Real automatic tilt calls obey the same
             # restored manual and provider-backoff guards as vertical calls.
             if not dry_run and not command_is_valid():
-                continue
+                return
             state = self.hass.states.get(entity_id)
             if state is None or state.state in {STATE_UNKNOWN, STATE_UNAVAILABLE}:
-                continue
-            supported = int(state.attributes.get("supported_features", 0))
+                return
+            supported = self._supported_features_from_state(state)
             supports_set = bool(supported & int(CoverEntityFeature.SET_TILT_POSITION))
             supports_open = bool(supported & int(CoverEntityFeature.OPEN_TILT))
             supports_close = bool(supported & int(CoverEntityFeature.CLOSE_TILT))
@@ -4726,13 +4852,13 @@ class SmartShadingController:
                         placeholders={"entity": entity_id, "room": self.room_name},
                         severity=ir.IssueSeverity.WARNING,
                     )
-                    continue
+                    return
             delete_issue(
                 self.hass, self.entry.entry_id, "cover_tilt_unsupported", entity_id
             )
             current = self._tilt_position_from_state(state)
             if current is not None and abs(current - target) <= POSITION_TOLERANCE:
-                continue
+                return
             vertical_current = self._position_from_state(state)
             recent_vertical = self._last_command.get(entity_id)
             vertical_target_pending = (
@@ -4746,17 +4872,17 @@ class SmartShadingController:
             if not dry_run and (
                 state.state in {"opening", "closing"} or vertical_target_pending
             ):
-                continue
+                return
             last = self._last_tilt_command.get(entity_id)
             if (
                 last
                 and last[0] == target
                 and (now - last[1]).total_seconds() <= COMMAND_GRACE_SECONDS
             ):
-                continue
+                return
             if dry_run:
                 result[entity_id] = target
-                continue
+                return
 
             if supports_set:
                 service = "set_cover_tilt_position"
@@ -4860,6 +4986,19 @@ class SmartShadingController:
                 await asyncio.shield(completion_save_task)
             if queue_result.success:
                 result[entity_id] = target
+        outcomes = await asyncio.gather(
+            *(apply_tilt(entity_id, position_target) for entity_id, position_target in position_targets.items()),
+            return_exceptions=True,
+        )
+        for entity_id, outcome in zip(position_targets, outcomes, strict=True):
+            if isinstance(outcome, asyncio.CancelledError):
+                raise outcome
+            if isinstance(outcome, Exception):
+                _LOGGER.error(
+                    "Cover operation failed for %s", entity_id,
+                    exc_info=(type(outcome), outcome, outcome.__traceback__),
+                )
+
         return result
 
     def _forget_failed_command(
@@ -4907,6 +5046,11 @@ class SmartShadingController:
             retry_active = bool(
                 self._command_retry_at is not None
                 and self._command_retry_at > dt_util.utcnow()
+                and (
+                    not self._provider_health_by_cover
+                    or self._provider_health_by_cover.get(entity_id, {}).get("state")
+                    == "degraded"
+                )
             )
             return bool(
                 self._started
@@ -4933,7 +5077,7 @@ class SmartShadingController:
         if normalize_boolean(self.config.get(CONF_DRY_RUN), False):
             return True
 
-        supported = int(state.attributes.get("supported_features", 0))
+        supported = self._supported_features_from_state(state)
         if supported & int(CoverEntityFeature.SET_POSITION):
             service = "set_cover_position"
             service_data = {ATTR_POSITION: target}
@@ -4971,6 +5115,14 @@ class SmartShadingController:
                 self._dispatching_command_contexts.pop(
                     command_result.context_id, None
                 )
+            if (
+                command_result.success
+                and not manual
+                and command_result.issued_at is not None
+            ):
+                # Commit the cooldown with the provider outcome, even if the
+                # original caller is cancelled during completion persistence.
+                self._last_move[entity_id] = command_result.issued_at
             if (
                 not command_result.success
                 and command_result.issued_at is not None
@@ -5168,7 +5320,7 @@ class SmartShadingController:
             state = self.hass.states.get(cover)
             if state is None:
                 continue
-            supported = int(state.attributes.get("supported_features", 0))
+            supported = self._supported_features_from_state(state)
             # Emergency-stop support is only actionable while a stop is
             # currently required; remove any issue left from an older event.
             delete_issue(
@@ -5359,6 +5511,16 @@ class SmartShadingController:
     @staticmethod
     def _attribute_float(state: State | None, attribute: str) -> float | None:
         return attribute_float(state, attribute)
+
+    @staticmethod
+    def _supported_features_from_state(state: State | None) -> int:
+        """Treat missing, malformed or non-finite provider features as unknown."""
+        if state is None:
+            return 0
+        try:
+            return max(0, int(state.attributes.get("supported_features", 0)))
+        except (TypeError, ValueError, OverflowError):
+            return 0
 
     @staticmethod
     def _position_from_state(state: State | None) -> int | None:

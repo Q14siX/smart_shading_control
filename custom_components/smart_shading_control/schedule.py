@@ -6,16 +6,15 @@ from collections.abc import Callable
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from typing import Any
 
-from .logic import as_list
 from .const import (
     CONF_RULE_ACTION,
     CONF_RULE_COVERS,
     CONF_RULE_DAY_TYPE,
     CONF_RULE_ENABLED,
-    CONF_RULE_FRIDAY,
     CONF_RULE_END,
     CONF_RULE_END_OFFSET,
     CONF_RULE_END_REFERENCE,
+    CONF_RULE_FRIDAY,
     CONF_RULE_ID,
     CONF_RULE_MONDAY,
     CONF_RULE_NAME,
@@ -47,6 +46,7 @@ from .const import (
     TIME_REFERENCE_SUNSET,
     TIME_REFERENCES,
 )
+from .logic import as_list
 
 SolarEventResolver = Callable[[str, date], datetime | None]
 DayTypeResolver = Callable[[date], bool | None]
@@ -74,7 +74,10 @@ def normalize_time(value: Any) -> str:
         raise ValueError(f"Unsupported time value: {value!r}")
     hour = int(parts[0])
     minute = int(parts[1])
-    second = int(float(parts[2])) if len(parts) == 3 else 0
+    try:
+        second = int(float(parts[2])) if len(parts) == 3 else 0
+    except OverflowError as err:
+        raise ValueError(f"Unsupported time value: {value!r}") from err
     return time(hour=hour, minute=minute, second=second).isoformat()
 
 
@@ -86,17 +89,31 @@ def parse_time(value: Any) -> time:
 
 def _normalize_reference(value: Any) -> str:
     reference = str(value or TIME_REFERENCE_FIXED)
-    return reference if reference in TIME_REFERENCES else TIME_REFERENCE_FIXED
+    if reference not in TIME_REFERENCES:
+        raise ValueError(f"Unsupported time reference: {value!r}")
+    return reference
 
 
 def _normalize_day_type(value: Any) -> str:
     day_type = str(value or DAY_TYPE_ANY)
-    return day_type if day_type in DAY_TYPES else DAY_TYPE_ANY
+    if day_type not in DAY_TYPES:
+        raise ValueError(f"Unsupported day type: {value!r}")
+    return day_type
 
 
 def _normalize_action(value: Any) -> str:
     action = str(value or RULE_ACTION_CLOSE)
-    return action if action in RULE_ACTIONS else RULE_ACTION_CLOSE
+    if action not in RULE_ACTIONS:
+        raise ValueError(f"Unsupported rule action: {value!r}")
+    return action
+
+
+def _rule_integer(value: Any) -> int:
+    """Expose corrupt infinite numeric storage through the normal rule guard."""
+    try:
+        return int(value)
+    except OverflowError as err:
+        raise ValueError(f"Unsupported rule number: {value!r}") from err
 
 
 def normalize_boolean(value: Any, default: bool = True) -> bool:
@@ -147,10 +164,10 @@ def normalize_rule(rule: dict[str, Any]) -> dict[str, Any]:
         result.get(CONF_RULE_TRIGGER, "22:00:00")
     )
     result[CONF_RULE_TRIGGER_OFFSET] = max(
-        -720, min(720, int(result.get(CONF_RULE_TRIGGER_OFFSET, 0)))
+        -720, min(720, _rule_integer(result.get(CONF_RULE_TRIGGER_OFFSET, 0)))
     )
     result[CONF_RULE_PRIORITY] = max(
-        1, min(100, int(result.get(CONF_RULE_PRIORITY, 50)))
+        1, min(100, _rule_integer(result.get(CONF_RULE_PRIORITY, 50)))
     )
     result[CONF_RULE_COVERS] = list(
         dict.fromkeys(
@@ -239,7 +256,10 @@ def resolve_rule_datetime(
         event_time = event_time.replace(tzinfo=local_tz)
     else:
         event_time = event_time.astimezone(local_tz)
-    return event_time + offset
+    # An offset denotes elapsed minutes before/after the solar event. Local
+    # datetime arithmetic instead adds wall-clock minutes and can move the
+    # trigger by an hour (or into a nonexistent time) across a DST transition.
+    return (event_time.astimezone(timezone.utc) + offset).astimezone(local_tz)
 
 
 def _day_type_matches(rule: dict[str, Any], is_workday: bool | None) -> bool:
@@ -441,10 +461,10 @@ def resolve_rule_states(
 ) -> tuple[dict[str, str], list[dict[str, Any]]]:
     """Return the latest matching action for every cover.
 
-    Weekly rules need at most seven days of history. One additional day covers
-    solar offsets and daylight-saving transitions. The latest close action is
-    used by the controller as a persistent night closure until a newer open
-    event releases it.
+    This bounded lookup covers an ordinary weekly schedule, plus a day for
+    solar offsets and daylight-saving transitions. Holidays and missing solar
+    events can create longer gaps, so absence from this result does not release
+    a persisted closure; callers merge it with resolve_persistent_rule_closures.
     """
     if local_now.tzinfo is None:
         raise ValueError("time-rule state evaluation requires a timezone-aware time")
@@ -464,3 +484,47 @@ def resolve_rule_states(
         item for item in diagnostics if item.get("effective_covers")
     ]
 
+
+def resolve_persistent_rule_closures(
+    rules: list[dict[str, Any]],
+    *,
+    previous_closed_covers: set[str],
+    resolved_states: dict[str, str],
+    all_covers: list[str],
+) -> set[str]:
+    """Merge bounded rule history with the last known scheduled closures.
+
+    Missing an event in the lookback window is not an OPEN event: holidays can
+    skip a weekly workday rule and polar regions may have no solar events for
+    weeks. Retain a prior closure only while an enabled, valid CLOSE rule still
+    targets that cover. An explicitly resolved OPEN always releases it. Removing
+    or disabling the last CLOSE rule, removing its cover, or clearing all its
+    weekdays also releases the old closure instead of holding it indefinitely.
+
+    The controller applies manual releases and newly triggered actions after
+    this merge. With incomplete Workday history, pass an empty resolved_states
+    mapping so uncertain reconstruction cannot undo a persisted closure.
+    """
+    available = set(all_covers)
+    close_rule_covers: set[str] = set()
+    for raw_rule in rules:
+        if not isinstance(raw_rule, dict) or not normalize_boolean(
+            raw_rule.get(CONF_RULE_ENABLED), True
+        ):
+            continue
+        try:
+            rule = normalize_rule(raw_rule)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if rule[CONF_RULE_ACTION] != RULE_ACTION_CLOSE or not any(
+            rule[field] for field in _WEEKDAY_FIELDS
+        ):
+            continue
+        close_rule_covers.update(available.intersection(rule[CONF_RULE_COVERS]))
+
+    return {
+        cover
+        for cover in close_rule_covers
+        if resolved_states.get(cover) == RULE_ACTION_CLOSE
+        or (cover in previous_closed_covers and cover not in resolved_states)
+    }

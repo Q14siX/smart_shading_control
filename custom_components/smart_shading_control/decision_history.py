@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
+from copy import deepcopy
 from datetime import datetime
 from typing import Any
 
@@ -37,7 +38,7 @@ class DecisionHistory:
                 "actual_positions": dict(actual_positions or {}),
                 "dry_run": bool(dry_run),
                 "active_weather_protection": active_weather_protection,
-                "command_queue": dict(command_queue or {}),
+                "command_queue": deepcopy(command_queue or {}),
             }
         )
 
@@ -61,6 +62,11 @@ class DecisionHistory:
                             ordered_entities.append(text)
             queue = record.get("command_queue")
             if isinstance(queue, dict):
+                for item in queue.get("active_commands", []):
+                    if isinstance(item, dict) and item.get("entity_id"):
+                        text = str(item["entity_id"])
+                        if text not in ordered_entities:
+                            ordered_entities.append(text)
                 for queue_key in ("active", "last_result"):
                     item = queue.get(queue_key)
                     if isinstance(item, dict) and item.get("entity_id"):
@@ -89,7 +95,12 @@ class DecisionHistory:
                 "actual_positions",
             ):
                 cleaned[key] = alias_mapping(cleaned.get(key))
-            queue = dict(cleaned.get("command_queue") or {})
+            queue = deepcopy(cleaned.get("command_queue") or {})
+            for item in queue.get("active_commands", []):
+                if isinstance(item, dict) and item.get("entity_id"):
+                    item["entity_id"] = aliases.get(
+                        str(item["entity_id"]), "unassigned_cover"
+                    )
             active = queue.get("active")
             if isinstance(active, dict) and active.get("entity_id"):
                 active = dict(active)

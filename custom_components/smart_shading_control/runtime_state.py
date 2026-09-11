@@ -172,7 +172,7 @@ def restore_temperature_samples(
     limit: int,
 ) -> list[tuple[datetime, float]]:
     """Restore a bounded, ordered temperature history inside its live horizon."""
-    if not isinstance(raw, list):
+    if not isinstance(raw, list) or limit <= 0:
         return []
     cutoff = now - horizon
     result: list[tuple[datetime, float]] = []
@@ -182,7 +182,7 @@ def restore_temperature_samples(
         timestamp = parse_utc_timestamp(item[0])
         try:
             value = float(item[1])
-        except (TypeError, ValueError):
+        except (OverflowError, TypeError, ValueError):
             continue
         if (
             timestamp is None

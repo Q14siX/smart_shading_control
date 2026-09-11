@@ -74,7 +74,7 @@ def attribute_float(state: State | None, attribute: str) -> float | None:
         value = state.attributes.get(attribute)
         numeric = float(value) if value is not None else None
         return numeric if numeric is not None and math.isfinite(numeric) else None
-    except (TypeError, ValueError):
+    except (OverflowError, TypeError, ValueError):
         return None
 
 
@@ -83,7 +83,7 @@ def temperature_to_celsius(value: Any, unit: Any) -> float | None:
         numeric = float(value)
         if not math.isfinite(numeric):
             return None
-    except (TypeError, ValueError):
+    except (OverflowError, TypeError, ValueError):
         return None
     source_unit = str(unit or UnitOfTemperature.CELSIUS)
     try:
@@ -95,7 +95,7 @@ def temperature_to_celsius(value: Any, unit: Any) -> float | None:
             )
         )
         return converted if math.isfinite(converted) else None
-    except (HomeAssistantError, TypeError, ValueError):
+    except (HomeAssistantError, OverflowError, TypeError, ValueError):
         return None
 
 

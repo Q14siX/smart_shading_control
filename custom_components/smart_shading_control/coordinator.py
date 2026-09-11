@@ -29,6 +29,8 @@ from .state_helpers import temperature_to_celsius
 _LOGGER = logging.getLogger(__name__)
 
 COORDINATOR_KEY = "global_coordinator"
+_PROVIDER_TIMEOUT_SECONDS = 10
+_WORKDAY_RETRY_SECONDS = 30
 
 
 class SmartShadingDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -51,10 +53,12 @@ class SmartShadingDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.entry = entry
         self.config = dict(config)
         self._workday_cache: dict[tuple[str, str], bool] = {}
+        self._workday_retry_after: dict[str, datetime] = {}
         self._workday_lock = asyncio.Lock()
         self._initial_refresh_lock = asyncio.Lock()
         self._ready = False
         self._last_attempt: datetime | None = None
+        self._config_revision = 0
         self.data = {
             "forecast": [],
             "forecast_updated": None,
@@ -67,10 +71,28 @@ class SmartShadingDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def update_config(self, entry: ConfigEntry | None, config: dict[str, Any]) -> None:
         """Update central configuration without replacing the coordinator."""
         previous_weather = self.config.get(CONF_WEATHER_ENTITY)
+        if self.entry is not entry or self.config != config:
+            self._config_revision += 1
         self.entry = entry
         self.config = dict(config)
         if previous_weather != self.config.get(CONF_WEATHER_ENTITY):
             self._ready = False
+            # An old provider call may still be awaiting its response. Clear
+            # its published data now so neither diagnostics nor another room
+            # can consume that provider after the configuration changed.
+            self.data = {
+                "forecast": [],
+                "forecast_updated": None,
+                "forecast_type": None,
+                "weather_entity": (
+                    str(self.config[CONF_WEATHER_ENTITY])
+                    if self.config.get(CONF_WEATHER_ENTITY)
+                    else None
+                ),
+                "last_error": None,
+                "last_error_retryable": False,
+            }
+            self._last_attempt = None
 
     async def async_ensure_ready(self, *, force: bool = False) -> None:
         """Perform one shared refresh after Home Assistant finished starting."""
@@ -92,11 +114,21 @@ class SmartShadingDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if age < 30:
                     return
             await self.async_refresh()
-            self._ready = True
+            self._ready = bool(
+                self.last_update_success
+                and (self.data or {}).get("weather_entity")
+                == (
+                    str(self.config[CONF_WEATHER_ENTITY])
+                    if self.config.get(CONF_WEATHER_ENTITY)
+                    else None
+                )
+                and self._last_attempt is not None
+            )
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Load the best forecast type supported by the configured entity."""
         self._last_attempt = dt_util.utcnow()
+        config_revision = self._config_revision
         weather_entity = self.config.get(CONF_WEATHER_ENTITY)
         previous = self.data or {}
         normalized_weather_entity = str(weather_entity) if weather_entity else None
@@ -153,7 +185,7 @@ class SmartShadingDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         try:
             supported = int(weather_state.attributes.get("supported_features", 0))
-        except (TypeError, ValueError):
+        except (OverflowError, TypeError, ValueError):
             supported = 0
 
         candidates: list[str] = []
@@ -188,17 +220,22 @@ class SmartShadingDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         errors: list[str] = []
         for forecast_type in candidates:
             try:
-                response = await self.hass.services.async_call(
-                    "weather",
-                    "get_forecasts",
-                    {"type": forecast_type},
-                    target={ATTR_ENTITY_ID: entity_id},
-                    blocking=True,
-                    return_response=True,
-                )
+                async with asyncio.timeout(_PROVIDER_TIMEOUT_SECONDS):
+                    response = await self.hass.services.async_call(
+                        "weather",
+                        "get_forecasts",
+                        {"type": forecast_type},
+                        target={ATTR_ENTITY_ID: entity_id},
+                        blocking=True,
+                        return_response=True,
+                    )
+                if config_revision != self._config_revision:
+                    return dict(self.data or {})
                 weather_data = (response or {}).get(entity_id, {})
-                if not isinstance(weather_data, dict):
-                    weather_data = {}
+                if not isinstance(weather_data, dict) or not isinstance(
+                    weather_data.get("forecast"), list
+                ):
+                    raise TypeError("Weather service returned an invalid forecast")
                 temperature_unit = weather_state.attributes.get("temperature_unit")
                 forecast: list[dict[str, Any]] = []
                 for raw_item in weather_data.get("forecast") or []:
@@ -226,6 +263,8 @@ class SmartShadingDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
                 return result
             except Exception as err:
+                if config_revision != self._config_revision:
+                    return dict(self.data or {})
                 errors.append(f"{forecast_type}: {type(err).__name__}: {err}")
                 _LOGGER.debug(
                     "Shared %s forecast could not be loaded from %s",
@@ -233,6 +272,10 @@ class SmartShadingDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     entity_id,
                     exc_info=True,
                 )
+                if isinstance(err, TimeoutError):
+                    # Different forecast types use the same provider. Do not
+                    # multiply its timeout while room evaluations await us.
+                    break
 
         # Keep a previously valid forecast only for the same provider. A later
         # evaluation retries after the entity/provider had time to settle.
@@ -287,29 +330,40 @@ class SmartShadingDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             local_now.date() + timedelta(days=delta) for delta in range(-9, 2)
         ]
         async with self._workday_lock:
+            retry_after = self._workday_retry_after.get(entity_id)
+            if retry_after is not None and retry_after > dt_util.utcnow():
+                return
+            self._workday_retry_after.pop(entity_id, None)
             for check_date in needed_dates:
                 key = (entity_id, check_date.isoformat())
                 if key in self._workday_cache:
                     continue
                 try:
-                    response = await self.hass.services.async_call(
-                        "workday",
-                        "check_date",
-                        {"check_date": check_date.isoformat()},
-                        target={ATTR_ENTITY_ID: entity_id},
-                        blocking=True,
-                        return_response=True,
-                    )
+                    async with asyncio.timeout(_PROVIDER_TIMEOUT_SECONDS):
+                        response = await self.hass.services.async_call(
+                            "workday",
+                            "check_date",
+                            {"check_date": check_date.isoformat()},
+                            target={ATTR_ENTITY_ID: entity_id},
+                            blocking=True,
+                            return_response=True,
+                        )
                     value = (response or {}).get(entity_id, {}).get("workday")
                     if isinstance(value, bool):
                         self._workday_cache[key] = value
                 except Exception:
+                    self._workday_retry_after[entity_id] = (
+                        dt_util.utcnow() + timedelta(seconds=_WORKDAY_RETRY_SECONDS)
+                    )
                     _LOGGER.debug(
                         "Could not check Workday state for %s on %s",
                         entity_id,
                         check_date,
                         exc_info=True,
                     )
+                    # Other rooms share this provider and cache. One outage
+                    # must not cause eleven waits per room per evaluation.
+                    break
         cutoff = local_now.date() - timedelta(days=14)
         for key in list(self._workday_cache):
             try:

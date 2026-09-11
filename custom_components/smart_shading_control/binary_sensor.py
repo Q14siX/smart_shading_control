@@ -19,7 +19,6 @@ from .const import (
 from .controller import SmartShadingController
 from .entity import SmartShadingEntity
 
-
 DESCRIPTIONS = (
     BinarySensorEntityDescription(
         key="direct_sun",
@@ -56,6 +55,9 @@ DESCRIPTIONS = (
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
 )
+
+
+PARALLEL_UPDATES = 0
 
 
 class SmartShadingBinarySensor(SmartShadingEntity, BinarySensorEntity):

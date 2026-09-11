@@ -176,11 +176,16 @@ def replace_config_entity_id_references(
 
 
 def normalize_pending_entity_renames(value: Any) -> list[dict[str, str]]:
-    """Return a validated, de-duplicated pending rename sequence."""
+    """Validate a rename sequence, removing adjacent duplicate notifications.
+
+    Non-adjacent repeats are significant: A → B → A → B must end at B.
+    Removing every previously seen pair would incorrectly stop at A and lose
+    the association between the current entity and its persisted overrides.
+    """
     if not isinstance(value, list):
         return []
     result: list[dict[str, str]] = []
-    seen: set[tuple[str, str]] = set()
+    previous_pair: tuple[str, str] | None = None
     for item in value:
         if not isinstance(item, dict):
             continue
@@ -189,9 +194,9 @@ def normalize_pending_entity_renames(value: Any) -> list[dict[str, str]]:
         pair = (old_entity_id, new_entity_id)
         if not old_entity_id or not new_entity_id or old_entity_id == new_entity_id:
             continue
-        if pair in seen:
+        if pair == previous_pair:
             continue
-        seen.add(pair)
+        previous_pair = pair
         result.append(
             {
                 "old_entity_id": old_entity_id,

@@ -11,6 +11,8 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from .controller import SmartShadingController
 from .entity import SmartShadingEntity
 
+PARALLEL_UPDATES = 0
+
 
 class SmartShadingAutomationSwitch(SmartShadingEntity, RestoreEntity, SwitchEntity):
     """Enable or disable all control for this room."""
@@ -30,7 +32,10 @@ class SmartShadingAutomationSwitch(SmartShadingEntity, RestoreEntity, SwitchEnti
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
         if not self.controller.enabled_state_loaded:
-            if (last_state := await self.async_get_last_state()) is not None:
+            if (
+                (last_state := await self.async_get_last_state()) is not None
+                and last_state.state in {"on", "off"}
+            ):
                 self.controller.enabled = last_state.state == "on"
             self.controller.mark_enabled_state_loaded()
             await self.controller.async_save_control_state()

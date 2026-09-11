@@ -13,7 +13,7 @@
 
 **Smart Shading Control** ist eine vollständig über die Home-Assistant-Oberfläche konfigurierbare Integration zur intelligenten, sicheren und raumbezogenen Steuerung von Rollläden und Jalousien.
 
-Aktuelle Version: **`20260905.120435`**  
+Aktuelle Version: **`20260911.154309`**  
 Veröffentlichungsstatus: **Stable**
 
 [Deutsch](#deutsch) · [English](#english)
@@ -21,6 +21,8 @@ Veröffentlichungsstatus: **Stable**
 ---
 
 ## Deutsch
+
+**Wiederanlauf nach manueller Sperre:** Alle fälligen Rollläden werden direkt neu bewertet. Ihre Befehle starten pro Raum gestaffelt mit ungefähr einer Sekunde Abstand (bei drei Rollläden typischerweise 0 / 1 / 2 Sekunden). Die Integration wartet für den nächsten Rollladen nicht auf den Abschluss des vorherigen Serviceaufrufs. Eine abgelaufene Sperre erhält einen gezielten Wiederanlauf, der nicht erneut vom normalen Mindestfahrintervall verzögert wird; noch aktive Sperren anderer Rollläden bleiben wirksam. Für denselben physischen Rollladen bleiben Befehle geordnet. Die Staffelung gilt auch für manuelle Gruppenbefehle und Lamellen-/Kontaktaktionen. Die tatsächliche Motorbewegung hängt von Home Assistant und dem jeweiligen Provider ab.
 
 ### Funktionsumfang
 
@@ -38,7 +40,7 @@ Veröffentlichungsstatus: **Stable**
 - virtuelle Raum- und Einzel-Cover
 - Status-, Diagnose-, Entscheidungs- und Reparaturentitäten
 - optionale Lamellensteuerung für kompatible Cover-Entitäten
-- serialisierte Befehlswarteschlange zur Entlastung von Rollladen-Gateways
+- Befehlswarteschlange mit mindestens einer Sekunde zwischen den Befehlsstarts pro Raum; langsame Providerantworten blockieren die anderen Rollläden nicht
 
 ### Voraussetzungen
 
@@ -264,9 +266,11 @@ Smart Shading Control wird unter der [MIT-Lizenz](LICENSE) veröffentlicht.
 
 ## English
 
+**Resuming after a manual override:** All due covers are reevaluated immediately. Commands are staggered by approximately one second per room (typically 0 / 1 / 2 seconds for three covers). Dispatch of the next cover does not wait for the previous service call to complete. An expired override receives a targeted resumption that is not delayed again by the ordinary movement cooldown; other covers' active overrides remain effective. Commands to the same physical cover remain ordered. Pacing also applies to manual group commands, tilt and contact actions. Actual motor movement depends on Home Assistant and the underlying provider.
+
 **Smart Shading Control** is a Home Assistant custom integration for intelligent, safe and room-based control of shutters and blinds. It is configured entirely through the Home Assistant user interface.
 
-Current version: **`20260905.120435`**  
+Current version: **`20260911.154309`**  
 Release status: **Stable**
 
 ### Main features
@@ -285,7 +289,7 @@ Release status: **Stable**
 - virtual room and individual cover entities
 - diagnostic, decision, status and repair entities
 - optional tilt control for supported covers
-- serialized command queue to avoid overloading cover gateways
+- command queue with at least one second between command starts per room; slow provider responses do not block the other covers
 
 ### Requirements
 

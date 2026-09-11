@@ -25,7 +25,7 @@ def normalize_irradiance(value: Any, unit: Any) -> float | None:
     """
     try:
         numeric = float(value)
-    except (TypeError, ValueError):
+    except (OverflowError, TypeError, ValueError):
         return None
     if not math.isfinite(numeric) or numeric < 0:
         return None
@@ -42,7 +42,7 @@ def normalize_illuminance(value: Any, unit: Any) -> float | None:
     """Return illuminance in lux."""
     try:
         numeric = float(value)
-    except (TypeError, ValueError):
+    except (OverflowError, TypeError, ValueError):
         return None
     if not math.isfinite(numeric) or numeric < 0:
         return None
@@ -59,7 +59,7 @@ def normalize_wind_speed(value: Any, unit: Any) -> float | None:
     """Return wind speed in km/h."""
     try:
         numeric = float(value)
-    except (TypeError, ValueError):
+    except (OverflowError, TypeError, ValueError):
         return None
     if not math.isfinite(numeric) or numeric < 0:
         return None
@@ -67,12 +67,14 @@ def normalize_wind_speed(value: Any, unit: Any) -> float | None:
     if normalized in {"", "km/h", "kmh", "kph"}:
         return numeric
     if normalized in {"m/s", "mps", "ms-1"}:
-        return numeric * 3.6
-    if normalized in {"mph", "mi/h"}:
-        return numeric * 1.609344
-    if normalized in {"kn", "kt", "kts", "knot", "knots"}:
-        return numeric * 1.852
-    return None
+        converted = numeric * 3.6
+    elif normalized in {"mph", "mi/h"}:
+        converted = numeric * 1.609344
+    elif normalized in {"kn", "kt", "kts", "knot", "knots"}:
+        converted = numeric * 1.852
+    else:
+        return None
+    return converted if math.isfinite(converted) else None
 
 
 def rain_is_active(value: Any, unit: Any = None) -> bool | None:
@@ -86,7 +88,7 @@ def rain_is_active(value: Any, unit: Any = None) -> bool | None:
         return False
     try:
         numeric = float(value)
-    except (TypeError, ValueError):
+    except (OverflowError, TypeError, ValueError):
         return None
     if not math.isfinite(numeric) or numeric < 0:
         return None

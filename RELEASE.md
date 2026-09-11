@@ -4,6 +4,69 @@
 
 # Smart Shading Control – Release Notes
 
+## `20260911.154309` – Gestaffelter Wiederanlauf und Async-Audit / Staggered Resumption and Async Audit
+
+**Datum / Date:** 11. September 2026 / 11 September 2026  
+**Build:** Audit-Korrektur auf Basis von `20260905.120435` / Audit fix based on `20260905.120435`  
+**Mindestversion / Minimum Home Assistant:** 2026.7.0  
+**Config-Entry-Version / Config Entry version:** 20, unverändert / unchanged
+
+### Deutsch
+
+#### Rollläden nach Ablauf der manuellen Sperre
+
+Der Controller wartete bisher in einer Schleife auf jeden einzelnen Rollladen. Zusätzlich führte die Raum-Warteschlange erst nach Abschluss eines Provideraufrufs und einer weiteren Pause den nächsten aus. Ein langsamer oder hängender erster Serviceaufruf konnte dadurch die übrigen Rollläden bis zu seinem Timeout zurückhalten. Eine reine Änderung an nur einer dieser beiden Stellen hätte den Engpass nicht beseitigt.
+
+Die neue Ausführung bereitet alle betroffenen Rollläden gemeinsam vor und wartet ihre Ergebnisse asynchron ab. **Zwischen den Service-Starts innerhalb eines Raums bleibt mindestens eine Sekunde Abstand.** Bei drei Rollläden starten die Aufrufe typischerweise bei **0 / 1 / 2 Sekunden**, auch wenn der erste Provider noch antwortet. Befehle für denselben physischen Rollladen bleiben zusätzlich nacheinander geordnet. Die Staffelung gilt auch für manuelle Gruppenfahrten, STOP, Lamellen und Kontaktaktionen.
+
+Nach Ablauf einer Sperre werden alle fälligen Entitäten neu bewertet. Ihr gezielter Wiederanlauf wird nicht erneut vom normalen Mindestfahrintervall zurückgehalten; noch laufende individuelle Sperren und Schutzprüfungen bleiben wirksam. Wiederanlaufbedarf wird bis zur Annahme bzw. Erreichung des aktuellen Ziels vorgehalten und für einen Neustart gespeichert. Während der Pause ersetzte, abgebrochene oder inzwischen ungültige Befehle erreichen den Provider nicht.
+
+#### Weitere Fehlerkorrekturen
+
+- **Veraltete Auswertungen:** Nach asynchronen Datenabfragen und Speichervorgängen wird die Eingaberevision erneut geprüft. Eine zwischenzeitlich neu gesetzte manuelle Sperre kann nicht mehr durch eine ältere Zeitregelauswertung entfernt werden. Notwendige Neubewertungen bleiben vorgemerkt.
+- **Fehler einzelner Rollläden:** Der Wiederholungsabstand eines fehlgeschlagenen Rollladens sperrt keine anderen gesunden Rollläden. Ein Erfolg auf einem anderen Rollladen entfernt dessen ausstehenden Wiederholungsversuch nicht.
+- **Entladen und Cancellation:** Laufende Controller-Aufgaben werden vor dem Warten auf die Auswertung beendet. Anschließend werden alle Queue-Worker und Completion-Callbacks abgearbeitet, bevor der letzte Zustand gespeichert wird. Abgebrochene Befehle hinterlassen dadurch keine veralteten Befehlsmarker im Neustartzustand. Bestätigte automatische Bewegungen speichern ihren Cooldown bereits im Completion-Callback. Auch eine abgebrochene Einrichtung räumt ihre Ressourcen auf.
+- **Wetter und Arbeitstage:** Serviceaufrufe besitzen ein Timeout von zehn Sekunden. Ein Timeout vervielfacht sich nicht mehr über weitere Forecast-Typen bzw. Kalendertage. Fehlgeschlagene Workday-Abfragen erhalten einen gemeinsam genutzten Wiederholungsabstand von 30 Sekunden. Verspätete Antworten eines vorherigen Wetterproviders werden verworfen; strukturell ungültige Antworten löschen keine zuvor gültige Prognose.
+- **Zeitregeln:** Sonnen-Offsets verwenden tatsächlich verstrichene Minuten über Sommer-/Winterzeitwechsel hinweg. Die Konflikterkennung vergleicht nur wirksame Triggerfelder. Beschädigte Regeln werden isoliert verworfen. Eine bestehende Nachtschließung geht bei Feiertags- oder Polarnachtlücken jenseits des historischen Suchfensters nicht verloren, solange eine passende aktive Schließregel besteht; neuere Öffnungen und entfernte Regeln geben sie weiterhin frei.
+- **Restore, Eingaben und Diagnose:** Ungültige gespeicherte Schalterzustände werden nicht als ausdrückliches Ausschalten interpretiert. Nicht endliche Zahlen und Überläufe werden abgefangen. Entitätsumbenennungen über eine Rückumbenennung hinweg behalten ihre richtige Reihenfolge. Warteschlangendaten in der Entscheidungshistorie bleiben unveränderlich und auch bei mehreren aktiven Befehlen anonymisiert. Schreibfehler der Zustandsspeicherung werden als Warnung protokolliert. Die Standard-Sonnenentität wird auch bei leerem alten Konfigurationseintrag beobachtet.
+
+#### Prüfung und Installation
+
+**133 automatisierte Regressionstests bestanden** mit Python 3.12.14. Die Tests verwenden produktive Module bzw. gezielt ausgeführte produktive Controllermethoden mit simulierter Home-Assistant-Ein-/Ausgabe. Sie prüfen unter anderem den Weg vom abgelaufenen Sperr-Timer zur Queue, den echten Ein-Sekunden-Startabstand, fehlgeschlagene und hängende Provider, Re-Trigger, Cancellation, Entladen, Zeitumstellungen und Migrationen. Eine Messung mit noch blockierten Providern ergab Starts bei **0,000 / 1,001 / 2,002 Sekunden**.
+
+Zusätzlich geprüft: Ruff, Python-Syntax, alle JSON-Dateien, gleiche Sprachschlüssel und Platzhalter, Versionsgleichheit, ZIP-Struktur und unveränderte Originalgrafiken. **Ein Live-Test mit Home Assistant 2026.7+ und realen Rollläden war hier nicht verfügbar.** Die gemessenen Zeiten beschreiben Service-Starts der Integration, nicht garantierte Motorlaufzeiten; zugrunde liegende HA-Integrationen können weitere Verzögerungen verursachen. Die Pause wird je Raum verwaltet.
+
+Das Installations-ZIP enthält die vollständige Integration unter `custom_components/smart_shading_control/`, beide Sprachvarianten, Grafiken, Manifest, Lizenz, HACS-Metadaten und Dokumentation. Den bestehenden Komponentenordner ersetzen und Home Assistant neu starten; eine neue Einrichtung ist nicht erforderlich. Bestehende Konfigurationen bleiben kompatibel. Das zusätzliche Audit-Paket enthält dieselben Dateien sowie Tests und Prüfskript. Historische Prüfaussagen in älteren Release-Abschnitten beziehen sich ausschließlich auf den jeweils damaligen Build.
+
+### English
+
+#### Covers after a manual override expires
+
+The controller previously awaited each cover in a loop. In addition, the room queue started the next command only after the previous provider call had completed and an additional pause had elapsed. A slow or stalled first service call could therefore hold back every other cover until its timeout. Changing only one of these two layers would not have removed the bottleneck.
+
+The new implementation prepares all affected covers together and awaits their results asynchronously. **Service starts within a room remain at least one second apart.** For three covers, calls typically start at **0 / 1 / 2 seconds**, even while the first provider is still responding. Commands to the same physical cover also remain ordered. Pacing applies to manual group movement, STOP, tilt and contact actions as well.
+
+When an override expires, all due entities are reevaluated. Their targeted resumption is not held back again by the ordinary movement cooldown; active individual overrides and protection checks remain effective. Resumption intent is retained until the current target is accepted or reached and is stored for restart recovery. Commands that are superseded, cancelled or invalidated during the pause do not reach the provider.
+
+#### Additional fixes
+
+- **Stale evaluations:** The input revision is checked again after asynchronous data requests and persistence. An older time-rule evaluation can no longer remove a manual override created while it was waiting. Required reevaluations remain pending.
+- **Individual cover failures:** A failed cover's retry delay does not block healthy covers. Success on another cover does not remove the outstanding retry for the failed one.
+- **Unload and cancellation:** Owned controller tasks are cancelled before waiting for evaluation to end. All queue workers and completion callbacks are then drained before the final state is saved. Interrupted commands therefore leave no stale command markers in restart storage. Confirmed automatic movements record their cooldown in the completion callback. Cancelled setup also cleans up its resources.
+- **Weather and workdays:** Service calls have a ten-second timeout. A timeout no longer multiplies across additional forecast types or calendar dates. Failed Workday requests use a shared 30-second retry delay. Late responses from an earlier weather provider are discarded; malformed responses do not erase a previously valid forecast.
+- **Time rules:** Solar offsets use elapsed minutes across daylight-saving transitions. Conflict detection compares only effective trigger fields. Malformed rules are rejected individually. An existing scheduled closure is retained across holiday or polar-event gaps beyond the historical search window while a matching enabled close rule remains; newer open events and removed rules still release it.
+- **Restore, inputs and diagnostics:** Invalid restored switch states are not interpreted as an explicit switch-off. Non-finite values and numeric overflow are handled. Entity rename chains retain their order across reversals. Decision history keeps immutable queue snapshots and anonymizes multiple active commands. State persistence failures are logged as warnings. The default sun entity is monitored even when an older configuration contains an empty source.
+
+#### Validation and installation
+
+**133 automated regression tests passed** using Python 3.12.14. Tests execute production modules or focused production controller methods with simulated Home Assistant I/O. They cover the expired-override timer-to-queue path, actual one-second start spacing, failing and stalled providers, retriggers, cancellation, unload, daylight-saving transitions and migrations. With providers deliberately held open, measured starts were **0.000 / 1.001 / 2.002 seconds**.
+
+Also verified: Ruff, Python syntax, all JSON files, matching translation keys and placeholders, consistent versions, ZIP layout and unchanged original graphics. **A live test with Home Assistant 2026.7+ and physical covers was not available here.** Measured timing describes integration service starts, not guaranteed motor movement; underlying HA integrations may add delays. Pacing is managed per room.
+
+The installation ZIP includes the complete integration under `custom_components/smart_shading_control/`, translations, graphics, manifest, license, HACS metadata and documentation. Replace the existing component directory and restart Home Assistant; no new configuration is required. Existing configuration remains compatible. The additional audit bundle includes the same files plus tests and a verification script. Historical validation statements in older release sections apply only to their respective builds.
+
+---
+
 ## `20260905.120435` – Plausibler Hitzeschutz und gesicherte Nachtpriorität / Solar-aware Heat Protection and Preserved Night Priority
 
 **Veröffentlichung / Release date:** 5. September 2026 / 5 September 2026  

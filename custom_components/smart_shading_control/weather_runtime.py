@@ -42,9 +42,9 @@ from .const import (
     STATUS_STORM_PROTECTION,
     STATUS_WIND_PROTECTION,
 )
-from .solar import SolarInput, build_solar_input
 from .runtime_state import parse_utc_timestamp
 from .schedule import normalize_boolean
+from .solar import SolarInput, build_solar_input
 from .state_helpers import attribute_float, temperature_state, temperature_to_celsius
 from .units import (
     normalize_illuminance,

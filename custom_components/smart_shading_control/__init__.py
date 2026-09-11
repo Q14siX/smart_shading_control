@@ -1190,7 +1190,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
         await controller.async_start()
         _register_source_entity_rename_listener(hass, entry)
-    except Exception:
+    except (Exception, asyncio.CancelledError):
         try:
             await controller.async_stop()
         except Exception:
@@ -1230,9 +1230,16 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     controller: SmartShadingController = entry.runtime_data
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
-        await controller.async_stop()
-        await async_shutdown_command_queue(hass, entry.entry_id)
-        _release_covers(hass, entry)
+        try:
+            await controller.async_stop()
+        finally:
+            # Platforms are already gone. Even a shutdown/storage failure
+            # must release this room's worker and cover ownership so a later
+            # reload cannot inherit an orphan command queue.
+            try:
+                await async_shutdown_command_queue(hass, entry.entry_id)
+            finally:
+                _release_covers(hass, entry)
     return unload_ok
 
 

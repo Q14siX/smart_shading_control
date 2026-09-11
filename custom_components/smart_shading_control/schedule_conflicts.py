@@ -8,8 +8,8 @@ from .const import (
     CONF_RULE_ACTION,
     CONF_RULE_COVERS,
     CONF_RULE_DAY_TYPE,
-    CONF_RULE_FRIDAY,
     CONF_RULE_ENABLED,
+    CONF_RULE_FRIDAY,
     CONF_RULE_ID,
     CONF_RULE_MONDAY,
     CONF_RULE_PRIORITY,
@@ -24,6 +24,7 @@ from .const import (
     CONF_RULE_WEDNESDAY,
     DAY_TYPE_ANY,
     RULE_SCOPE_GLOBAL,
+    TIME_REFERENCE_FIXED,
 )
 from .schedule import normalize_boolean, normalize_rule
 
@@ -54,11 +55,17 @@ def _covers(rule: dict[str, Any], all_covers: set[str]) -> set[str]:
 
 
 def _same_trigger(left: dict[str, Any], right: dict[str, Any]) -> bool:
-    return (
-        left[CONF_RULE_TRIGGER_REFERENCE] == right[CONF_RULE_TRIGGER_REFERENCE]
-        and left[CONF_RULE_TRIGGER] == right[CONF_RULE_TRIGGER]
-        and left[CONF_RULE_TRIGGER_OFFSET] == right[CONF_RULE_TRIGGER_OFFSET]
-    )
+    """Compare the fields actually used to resolve each event.
+
+    Switching reference type retains the previous time or solar offset in
+    storage. Those inactive fields must not hide an actual schedule conflict.
+    """
+    reference = left[CONF_RULE_TRIGGER_REFERENCE]
+    if reference != right[CONF_RULE_TRIGGER_REFERENCE]:
+        return False
+    if reference == TIME_REFERENCE_FIXED:
+        return left[CONF_RULE_TRIGGER] == right[CONF_RULE_TRIGGER]
+    return left[CONF_RULE_TRIGGER_OFFSET] == right[CONF_RULE_TRIGGER_OFFSET]
 
 
 def detect_rule_conflicts(
@@ -151,6 +158,10 @@ def first_blocking_conflict(
         return "rule_no_weekdays"
     combined: list[dict[str, Any]] = []
     for rule in existing_rules:
+        if not isinstance(rule, dict) or not normalize_boolean(
+            rule.get(CONF_RULE_ENABLED), True
+        ):
+            continue
         if str(rule.get(CONF_RULE_ID)) == str(editing_rule_id or ""):
             continue
         try:

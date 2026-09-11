@@ -141,7 +141,7 @@ def _state_supports_stop(state: State | None) -> bool:
         return False
     try:
         supported = int(state.attributes.get("supported_features", 0))
-    except (TypeError, ValueError):
+    except (OverflowError, TypeError, ValueError):
         return False
     return bool(supported & int(CoverEntityFeature.STOP))
 

@@ -8,9 +8,11 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
-from .const import MODES, MODE_AUTOMATIC
+from .const import MODE_AUTOMATIC, MODES
 from .controller import SmartShadingController
 from .entity import SmartShadingEntity
+
+PARALLEL_UPDATES = 0
 
 
 class SmartShadingModeSelect(SmartShadingEntity, RestoreEntity, SelectEntity):

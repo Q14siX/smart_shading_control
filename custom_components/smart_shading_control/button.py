@@ -10,7 +10,6 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from .controller import SmartShadingController
 from .entity import SmartShadingEntity
 
-
 DESCRIPTIONS = (
     ButtonEntityDescription(
         key="recalculate",
@@ -28,6 +27,9 @@ DESCRIPTIONS = (
         icon="mdi:delete-sweep-outline",
     ),
 )
+
+
+PARALLEL_UPDATES = 0
 
 
 class SmartShadingButton(SmartShadingEntity, ButtonEntity):
