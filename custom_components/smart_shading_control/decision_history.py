@@ -96,11 +96,16 @@ class DecisionHistory:
             ):
                 cleaned[key] = alias_mapping(cleaned.get(key))
             queue = deepcopy(cleaned.get("command_queue") or {})
-            for item in queue.get("active_commands", []):
+            for index, item in enumerate(queue.get("active_commands", [])):
                 if isinstance(item, dict) and item.get("entity_id"):
-                    item["entity_id"] = aliases.get(
+                    # Queue snapshots share the first active command between
+                    # both views. Replace this row so its alias cannot be
+                    # translated a second time through the single-item view.
+                    cleaned_item = dict(item)
+                    cleaned_item["entity_id"] = aliases.get(
                         str(item["entity_id"]), "unassigned_cover"
                     )
+                    queue["active_commands"][index] = cleaned_item
             active = queue.get("active")
             if isinstance(active, dict) and active.get("entity_id"):
                 active = dict(active)

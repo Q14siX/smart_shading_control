@@ -13,7 +13,7 @@
 
 **Smart Shading Control** ist eine vollständig über die Home-Assistant-Oberfläche konfigurierbare Integration zur intelligenten, sicheren und raumbezogenen Steuerung von Rollläden und Jalousien.
 
-Aktuelle Version: **`20260911.154309`**  
+Aktuelle Version: **`20260924.160135`**  
 Veröffentlichungsstatus: **Stable**
 
 [Deutsch](#deutsch) · [English](#english)
@@ -149,14 +149,16 @@ Eine Schließregel erzeugt einen anhaltenden Nacht-Schließzustand. Eine später
 
 ### Fenster- und Türkontakte
 
-Ein zugeordneter Kontakt schützt ausschließlich automatische Schließbewegungen aus einer Nacht- beziehungsweise Schließregel.
+Ein zugeordneter Kontakt schützt den betreffenden Rollladen während einer aktiven automatischen Nacht- beziehungsweise Schließregel. Tagsüber bleiben die normale Sonnen- und Hitzeschutzsteuerung sowie ausdrücklich gewählte Betriebsarten davon unabhängig.
 
-- **geschlossen:** Die Schließung ist nach einer kurzen Entprellzeit zulässig.
-- **geöffnet oder gekippt:** Die automatische Schließung wird blockiert.
-- **unknown oder unavailable:** Die automatische Schließung wird sicherheitshalber blockiert, ohne den Rollladen zu bewegen.
-- **kein Kontakt zugeordnet:** Der Rollladen kann ohne Kontaktprüfung automatisch öffnen und schließen.
+- **geschlossen:** Die Nachtregel darf schließen. Wurde die Schließung zuvor wegen des Kontakts zurückgehalten, muss der Kontakt zunächst **30 Sekunden durchgehend geschlossen** sein.
+- **geöffnet oder gekippt:** Der Rollladen darf nicht auf die Nachtposition schließen. Ohne aktive manuelle Sperre wird die konfigurierte Öffnungsposition angefordert; eine bereits weiter geöffnete Position wird dafür nicht abgesenkt.
+- **unknown oder unavailable:** Eine Nacht-Schließung wird blockiert, aber keine Öffnung aus einem unbekannten Fensterzustand abgeleitet. Eine bereits laufende, nachweislich automatische Nacht-Schließbewegung kann gestoppt werden.
+- **kein Kontakt zugeordnet:** Der Rollladen folgt den sonstigen Automatikregeln ohne Kontaktprüfung.
 
-Wurde ein Rollladen nachweislich durch eine Nachtregel geschlossen, kann ein echter Übergang von geschlossen zu geöffnet oder gekippt den Rollladen wieder öffnen. Ein bloßer Wiederanlauf eines Kontakts von `unknown` oder `unavailable` zu `open` gilt nicht als tatsächliches Öffnen und löst keine Fahrt aus.
+**Ein geöffnetes Fenster ist ein dauerhaft zu berücksichtigender Zustand, nicht nur ein einmaliges Ereignis.** Wurde der zugehörige Rollladen manuell geschlossen, bleibt die manuelle Sperre zunächst wirksam. Sobald sie endet, fordert die Automatik bei weiterhin aktiver Nachtregel und weiterhin geöffnetem oder gekipptem Fenster die Öffnung an. Dafür muss das Fenster weder erneut geschlossen und geöffnet worden sein noch ein früherer automatischer Schließbefehl vorliegen.
+
+Das gilt ebenfalls nach einem Neustart oder der Wiederkehr gültiger Kontaktdaten: Maßgeblich sind die aktuelle Regel, der tatsächlich bekannte Kontaktzustand und noch aktive Sperren. Ein wartender Kontakt-Öffnungsbefehl wird vor dem Start nochmals geprüft und bei inzwischen geschlossenem Fenster, neuer manueller Sperre oder nicht mehr gültiger Automatik verworfen.
 
 ### Manuelle Übersteuerung
 
@@ -171,9 +173,17 @@ Erkennt die Integration eine manuelle Fahrt, wird der betroffene Rollladen für 
 - eine neu ausgelöste Zeitregel darf eine ältere manuelle Sperre gezielt ersetzen
 - Wiederholungsversuche einer bereits früher ausgelösten Öffnungsregel dürfen eine spätere manuelle Bedienung nicht aufheben
 
-Nach Ablauf einer manuellen Sperre wird der betroffene Rollladen sofort neu bewertet. Sind mehrere Rollläden im Raum fällig, starten die nötigen Fahrbefehle mit einer Sekunde Abstand, ohne auf das nächste Auswertungsintervall zu warten.
+Nach Ablauf einer manuellen Sperre wird **der gesamte Raum anhand der aktuell gültigen Automatik neu bewertet**. Dadurch nehmen alle Rollläden des Raums die geltende Raumautomatik wieder auf; Rollläden mit einer eigenen noch aktiven manuellen Sperre bleiben weiterhin unangetastet. Dazu gehören die letzte wirksame Öffnungs- oder Schließregel, der zugeordnete Kontakt und die aktuellen Schutzfunktionen. Auch eine bereits früher ausgelöste, noch maßgebliche Öffnungsregel wird berücksichtigt, beispielsweise vor Sonnenaufgang. Ein alter Fahrbefehl wird nicht blind wiederholt, und eine neuere Schließregel bleibt maßgeblich.
+
+Sind mehrere Rollläden im Raum aufgrund der aktuellen Automatik fällig, starten die nötigen Fahrbefehle mit ungefähr einer Sekunde Abstand. Das nächste regelmäßige Auswertungsintervall und das normale Mindestfahrintervall müssen nicht zusätzlich abgewartet werden. Noch aktive Sperren anderer Rollläden bleiben unangetastet. Ein bereits erreichtes Ziel, ein langsamer Serviceaufruf oder ein Gerätefehler verbraucht nicht den Wiederanlauf der übrigen Rollläden. Nicht ausführbare Ziele bleiben für eine erneute Bewertung erhalten; die bestehenden Provider-Wiederholungs- und Schutzregeln gelten weiter.
+
+Läuft eine Sperre während eines Neustarts oder einer Nichtverfügbarkeit ab, bleibt die fällige Neubewertung pro Rollladen erhalten. Gespeicherte Ablaufzeitpunkte werden nicht verlängert. Bei fehlenden erforderlichen Tagesdaten wird weiterhin gehalten, statt ein nicht begründetes Öffnungsziel zu erfinden.
 
 Konfigurierte Sicherheitsmaßnahmen können eine manuelle Sperre übersteuern, wenn dies zum Schutz der Anlage erforderlich ist. Bei einem aktiven Wind-, Sturm-, Regen- oder Frostschutz mit vorgegebener Sicherheitsposition wird ein manueller Positionsbefehl, der den Rollladen weiter in die unsichere Richtung fahren würde, auf diese Position begrenzt. Eine Fahrt in die sicherere Richtung bleibt möglich. Die Frost-Aktion **Automatik blockieren** sperrt entsprechend ihrer Konfiguration nur Automatikfahrten. Ein ausdrücklich ausgelöster manueller STOP hat als unmittelbarer Benutzer- beziehungsweise Notstopp Vorrang vor einer noch ausstehenden Fahrt.
+
+Zeitgesteuerte Öffnungen bleiben für jeden Rollladen einzeln ausstehend, bis seine Rückmeldung die Zielposition bestätigt. Die Annahme eines Fahrbefehls allein beendet die Anforderung nicht. Bleibt ein Rollladen stehen, kann die Automatik ihn innerhalb des begrenzten Wiederholungszeitraums erneut anfordern. Bereits erreichte Ziele und laufende Fahrten werden dabei berücksichtigt; manuelle Sperren, Schutzregeln und die Wartezeit nach einem Gerätefehler gelten weiterhin. Die normale Mindestfahrpause und Mindestpositionsänderung für dynamische Beschattung verzögern ausstehende Zeitregelziele nicht.
+
+Ein neuer Einzelbefehl oder eine erkannte Wandtasterbedienung ersetzt nur die noch wartenden manuellen Befehle desselben Rollladens. Die übrigen Rollläden eines Gruppenbefehls führen ihre eigenen Aufträge weiter aus.
 
 ### Neustart- und Reload-Verhalten
 
@@ -221,18 +231,14 @@ Die Steuerung berücksichtigt unter anderem folgende Grundsätze:
 2. Explizite Betriebsarten haben Vorrang vor der dynamischen Beschattung.
 3. Zeitregeln können die dynamische Zielposition ersetzen.
 4. Wetter- und Frostschutz kann eine sicherere Position erzwingen.
-5. Kontakte blockieren nur die automatische Nacht-Schließung.
+5. Kontakte schützen die automatische Nacht-Schließung und verlangen bei bekannt geöffnetem Fenster ohne aktive manuelle Sperre eine Öffnung.
 6. Manuelle Sperren unterdrücken normale automatische Ziele, nicht jedoch notwendige Sicherheitsbewegungen.
 7. Mindeständerung und Mindestfahrabstand verhindern unnötige oder zu häufige Fahrbefehle.
 8. Im Trockenlauf werden Entscheidungen berechnet, aber keine Befehle an Geräte gesendet.
 
-### Release-Historie
+### Aktualisierung
 
-Die Version **`20260903.085028`** vom 3. September 2026 war die **erste öffentliche Stable-Veröffentlichung** von Smart Shading Control.
-
-Für die Erstinstallation wird Smart Shading Control über HACS oder manuell installiert und anschließend vollständig über die Home-Assistant-Oberfläche eingerichtet. Nach der Installation ist ein vollständiger Neustart von Home Assistant erforderlich.
-
-Die Erstveröffentlichung enthält bereits die korrigierte Erkennung manueller Mehrfachbedienungen: Auch der zuerst manuell angesteuerte Rollladen eines Raums erhält zuverlässig seine manuelle Sperre und wird nicht durch eine spätere automatische Auswertung vorzeitig auf einen Automatik-Sollwert zurückgefahren. Dies gilt unabhängig davon, ob dem Rollladen ein Fenster- oder Türkontakt zugeordnet ist.
+Das vollständige Paket enthält die Integration für Neuinstallationen und bestehende Installationen. Bei einer manuellen Aktualisierung den Ordner `custom_components/smart_shading_control/` durch den gleichnamigen Ordner aus dem Paket ersetzen und Home Assistant vollständig neu starten. Vorhandene Raumkonfigurationen und Kontaktzuordnungen bleiben kompatibel; eine Neueinrichtung ist nicht erforderlich. Änderungen der aktuellen Version stehen in [RELEASE.md](RELEASE.md).
 
 ### Hilfe und Fehlerberichte
 
@@ -268,7 +274,7 @@ Smart Shading Control wird unter der [MIT-Lizenz](LICENSE) veröffentlicht.
 
 **Smart Shading Control** is a Home Assistant custom integration for intelligent, safe and room-based control of shutters and blinds. It is configured entirely through the Home Assistant user interface.
 
-Current version: **`20260911.154309`**  
+Current version: **`20260924.160135`**  
 Release status: **Stable**
 
 ### Main features
@@ -349,14 +355,16 @@ The created rule is not stored centrally. It can afterwards only be edited or de
 
 ### Opening contacts
 
-Contacts only restrict automatic closing caused by a night or close schedule.
+An assigned contact protects its cover during an active automatic night or close schedule. Daytime solar/heat shading and explicitly selected operating modes remain independent of this contact policy.
 
-- `closed`: closing is allowed after a short debounce period
-- `open` or `tilted`: automatic closing is blocked
-- `unknown` or `unavailable`: closing is blocked without moving the cover
-- no assigned contact: the cover may open and close without contact checks
+- `closed`: scheduled closing is allowed. If the contact previously blocked that closing, it must remain **continuously closed for 30 seconds** first.
+- `open` or `tilted`: the cover must not close to its night position. Without an active manual override, the configured opening position is requested; an already more open position is not lowered for this purpose.
+- `unknown` or `unavailable`: scheduled closing is blocked without inferring an opening target from an unknown window position. An already running, confirmed automatic night-close movement may be stopped.
+- no assigned contact: the cover follows the other automation rules without a contact check.
 
-A real transition from closed to open or tilted can reopen a cover that was previously closed by a night rule. Provider recovery from `unknown` or `unavailable` is not treated as a real opening event.
+**An open window is a persistent condition, not just a one-shot event.** A manually closed cover initially remains protected by its active override. Once the override expires, an active night rule together with a still open or tilted contact requests opening. This requires neither another close/open contact transition nor an earlier automatic-close command.
+
+The same state-based evaluation applies after a restart or recovery of valid contact data: the current rule, known contact state and remaining manual holds determine the target. Queued contact-opening commands are checked again before execution and discarded if the window has closed, a new manual hold exists or the automatic action is no longer applicable.
 
 ### Manual overrides
 
@@ -364,9 +372,17 @@ Detected manual movement temporarily excludes the affected cover from normal aut
 
 The default duration is 240 minutes. It can be transferred globally and changed per room afterwards. Active overrides are always stored per cover with their absolute expiry. A restart or reload restores only the original remaining time: expired overrides are discarded, and the configured duration is not started again. Temporary overrides end at the next local midnight.
 
-When a manual override expires, the affected cover is reevaluated immediately. If several covers in the room are due, the required movement commands start one second apart, without waiting for the next evaluation interval.
+When a manual override expires, **the complete room is reevaluated against the currently applicable automation**. This makes every cover in the room resume the active room automation; covers with their own still-active manual override remain untouched. This includes the latest effective opening or closing rule, its assigned contact and current protection requirements. An earlier opening rule that is still effective is considered even before sunrise. Old commands are not blindly replayed, and a newer closing rule retains precedence.
+
+If several covers are due, required service calls start roughly one second apart, without an additional wait for the periodic evaluation or normal movement cooldown. Other covers with active holds remain protected. An already reached target, a slow service call or a provider failure cannot consume another cover's pending resumption. Targets that could not be applied remain eligible for reevaluation, subject to the existing provider retry and protection policy.
+
+Resumption remains pending per cover when a hold expires during a restart or unavailability. Stored deadlines are not extended. Missing required daytime inputs still hold position rather than manufacture an unsupported opening target.
 
 Configured wind, storm, rain or frost protection with a defined safety position may still enforce that position. A manual position request that would move farther into an unsafe direction is clamped to it, while a request in the safer direction remains possible. The frost action **block automation** restricts automatic commands only, as configured. An explicit manual STOP retains precedence as an immediate user or emergency stop.
+
+Scheduled opening remains pending separately for each cover until its feedback confirms the target position. Acceptance of a movement command alone does not complete the request. If a cover remains stationary, automation can request it again within the bounded retry period. Covers already at target and ongoing movements are taken into account; manual holds, protection rules and provider error backoff still apply. The normal movement cooldown and minimum position change used for dynamic shading do not delay pending schedule targets.
+
+A new individual command or detected wall-switch action replaces only the waiting manual commands for that same cover. The other covers in a group request continue with their own commands.
 
 ### Restart and reload behavior
 
@@ -376,13 +392,9 @@ Live sensor, sun, contact and cover state is read again and the desired target i
 
 If an existing persistent safety store is corrupt or semantically invalid, the affected room fails closed: its Config Entry stays not ready until the store is recovered or deliberately cleared, instead of starting without the protection state.
 
-### Release history
+### Updating
 
-Version **`20260903.085028`**, released on 3 September 2026, was the **first public Stable release** of Smart Shading Control.
-
-For a first installation, install Smart Shading Control through HACS or manually and configure it entirely through the Home Assistant user interface. A full Home Assistant restart is required after installation.
-
-The first public release already includes the corrected detection of manual multi-cover operation: the first cover manually operated in a room now reliably receives its manual override as well and is not moved back to an automatic target by a later evaluation. This behavior is independent of whether an opening contact is assigned to that cover.
+The complete package supports new and existing installations. For a manual update, replace `custom_components/smart_shading_control/` with the matching directory from the archive and fully restart Home Assistant. Existing room settings and contact assignments remain compatible; no new setup is required. See [RELEASE.md](RELEASE.md) for the current version's changes.
 
 ### Support
 

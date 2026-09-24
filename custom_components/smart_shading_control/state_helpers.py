@@ -8,6 +8,7 @@ from typing import Any
 from homeassistant.components.cover import (
     ATTR_CURRENT_POSITION,
     ATTR_CURRENT_TILT_POSITION,
+    CoverEntityFeature,
 )
 from homeassistant.const import (
     ATTR_UNIT_OF_MEASUREMENT,
@@ -118,6 +119,13 @@ def position_from_state(state: State | None) -> int | None:
     if position is not None:
         return max(0, min(100, round(position)))
     if state.state == STATE_OPEN:
+        try:
+            supported = max(0, int(state.attributes.get("supported_features", 0)))
+        except (OverflowError, TypeError, ValueError):
+            supported = 0
+        if supported & int(CoverEntityFeature.SET_POSITION):
+            # OPEN means not closed; it does not confirm a percentage target.
+            return None
         return 100
     if state.state == STATE_CLOSED:
         return 0

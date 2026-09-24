@@ -295,6 +295,11 @@ class WeatherRuntime:
                 # conservatively by the hold logic below.
                 if self.active_protection != kind:
                     self._protection_seen_since.pop(kind, None)
+                else:
+                    # Clear input may already have removed the activation
+                    # marker. Unknown input cancels its release timer, so keep
+                    # evidence for the retained protection across a restart.
+                    self._protection_seen_since.setdefault(kind, now)
 
         priority = ("storm", "wind", "rain", "frost")
         selected = next((kind for kind in priority if kind in matured), None)

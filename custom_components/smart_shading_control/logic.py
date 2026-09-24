@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from math import cos, isfinite, radians
 from typing import Any
 
@@ -314,16 +315,65 @@ def allow_solar_gain(
     )
 
 
-def forecast_max_temperature(forecast: list[dict[str, Any]], hours: int) -> float | None:
+def forecast_max_temperature(
+    forecast: list[dict[str, Any]],
+    hours: int,
+    *,
+    now: datetime | None = None,
+    forecast_type: str | None = None,
+) -> float | None:
     """Return the maximum temperature from the selected forecast horizon."""
+    horizon = max(1, hours)
+    timestamped = now is not None and any(
+        isinstance(item, dict) and "datetime" in item for item in forecast
+    )
+    if timestamped:
+        if now.tzinfo is None:
+            raise ValueError("forecast evaluation requires a timezone-aware time")
+        now_utc = now.astimezone(timezone.utc)
+        end_utc = now_utc + timedelta(hours=horizon)
+        period = timedelta(hours=12 if forecast_type == "twice_daily" else 1)
+        selected: list[dict[str, Any]] = []
+        for item in forecast:
+            if not isinstance(item, dict):
+                continue
+            try:
+                timestamp = datetime.fromisoformat(str(item.get("datetime")))
+                if timestamp.tzinfo is None:
+                    continue
+                if forecast_type == "daily":
+                    # A daily maximum applies to its local calendar day even when
+                    # the provider's timestamp for today precedes the current hour.
+                    event_date = timestamp.astimezone(now.tzinfo).date()
+                    if not now.date() <= event_date <= end_utc.astimezone(now.tzinfo).date():
+                        continue
+                else:
+                    timestamp_utc = timestamp.astimezone(timezone.utc)
+                    if timestamp_utc > end_utc or timestamp_utc + period <= now_utc:
+                        continue
+            except (OverflowError, TypeError, ValueError):
+                # A parseable provider date can overflow during timezone
+                # conversion. Ignore that entry without losing valid siblings.
+                continue
+            selected.append(item)
+    else:
+        # Older stored forecasts may lack timestamps. Preserve their bounded
+        # fallback until the next provider refresh supplies dated entries.
+        count = horizon
+        if now is not None and forecast_type in {"daily", "twice_daily"}:
+            period_hours = 24 if forecast_type == "daily" else 12
+            count = max(1, (horizon + period_hours - 1) // period_hours + 1)
+        selected = forecast[:count]
     values: list[float] = []
-    for item in forecast[: max(1, hours)]:
+    for item in selected:
+        if not isinstance(item, dict):
+            continue
         value = item.get("temperature")
         try:
             if value is not None:
                 numeric = float(value)
                 if isfinite(numeric):
                     values.append(numeric)
-        except (TypeError, ValueError):
+        except (OverflowError, TypeError, ValueError):
             continue
     return max(values) if values else None

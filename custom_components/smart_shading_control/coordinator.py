@@ -403,6 +403,7 @@ async def async_get_or_create_coordinator(
         current_entry_id = entry.entry_id if entry is not None else None
         if hass.state is CoreState.running and (
             previous_entry_id != current_entry_id
+            or not coordinator._ready
             or not coordinator.last_update_success
             or (coordinator.data or {}).get("weather_entity")
             != (

@@ -280,8 +280,22 @@ class SmartShadingRoomCover(SmartShadingEntity, CoverEntity):
 
     @property
     def is_closed(self) -> bool | None:
-        position = self.current_cover_position
-        return None if position is None else position == 0
+        """Keep a slightly open member visible even when the mean rounds to zero."""
+        known_closed = False
+        for entity_id in self.controller.all_covers:
+            state = self.hass.states.get(entity_id)
+            if not _state_is_available(state):
+                continue
+            position = self.controller.position_from_state(state)
+            if position is not None:
+                if position > 0:
+                    return False
+                known_closed = True
+            elif state.state in {"open", "opening", "closing"}:
+                return False
+            elif state.state == "closed":
+                known_closed = True
+        return True if known_closed else None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:

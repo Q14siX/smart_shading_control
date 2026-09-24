@@ -79,6 +79,7 @@ _RUNTIME_REDACT = {
     "actual_tilt_positions",
     "manual_overrides",
     "manual_override_details",
+    "override_resume_covers",
     "last_manual_override_event",
     "last_manual_group_command",
     "last_manual_cover_command",

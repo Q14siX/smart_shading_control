@@ -82,6 +82,7 @@ REASON_CODES = [
     "time_rule_closed",
     "time_rule_close_blocked_contact",
     "time_rule_close_contact_delay",
+    "time_rule_open_contact",
     "all_manual_override",
     "storm_protection",
     "wind_protection",
@@ -273,6 +274,9 @@ class SmartShadingSensor(SmartShadingEntity, SensorEntity):
                 ),
                 "manual_override_details": dict(
                     self.controller.data.get("manual_override_details") or {}
+                ),
+                "override_resume_covers": list(
+                    self.controller.data.get("override_resume_covers") or []
                 ),
             }
         if self.entity_description.key in {"heat_risk", "sun_load", "reason_code"}:

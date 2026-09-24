@@ -595,7 +595,8 @@
           "time_rule_close_blocked_contact": "Night closing blocked by open contact",
           "time_rule_close_contact_delay": "Night closing waiting after contact closed",
           "dynamic_no_solar_heat_gain": "Dynamic: insufficient solar heat gain",
-          "dynamic_inputs_unavailable": "Dynamic: missing input data – hold position"
+          "dynamic_inputs_unavailable": "Dynamic: missing input data – hold position",
+          "time_rule_open_contact": "Night rule: open window requires opening"
         }
       },
       "decision_diagnostics": {
@@ -626,7 +627,8 @@
           "time_rule_close_blocked_contact": "Night closing blocked by open contact",
           "time_rule_close_contact_delay": "Night closing waiting after contact closed",
           "dynamic_no_solar_heat_gain": "Dynamic: insufficient solar heat gain",
-          "dynamic_inputs_unavailable": "Dynamic: missing input data – hold position"
+          "dynamic_inputs_unavailable": "Dynamic: missing input data – hold position",
+          "time_rule_open_contact": "Night rule: open window requires opening"
         }
       },
       "forecast_age": {

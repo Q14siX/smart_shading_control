@@ -181,6 +181,29 @@ class SmartShadingCommandQueue:
                 )
             previous = self._pending.get(key)
             if previous is not None and not previous.started:
+                invalid_reason = None
+                if previous.future.done():
+                    invalid_reason = "cancelled"
+                elif (
+                    requested_priority > previous.priority
+                    and previous.is_valid is not None
+                ):
+                    # Priority protects only a live command. An obsolete
+                    # safety target must not discard a later valid request.
+                    try:
+                        if not previous.is_valid():
+                            invalid_reason = "obsolete"
+                    except Exception:
+                        _LOGGER.exception(
+                            "Command validity callback failed for %s",
+                            previous.entity_id,
+                        )
+                        invalid_reason = "validation_error"
+                if invalid_reason is not None:
+                    self._pending.pop(key, None)
+                    self._finish_skipped(previous, invalid_reason)
+                    previous = None
+            if previous is not None and not previous.started:
                 if requested_priority > previous.priority:
                     # A numerically lower value has higher priority. Keep a
                     # queued emergency/safety command authoritative instead of
@@ -510,6 +533,17 @@ class SmartShadingCommandQueue:
                 or self._pending.get(key) is not item
                 or item.future.done()
             ):
+                return False
+            # Another channel for this cover may have acquired more urgent
+            # work while this item waited for its room dispatch slot. Select
+            # again before starting so a pending STOP also preempts tilt.
+            if any(
+                pending.entity_id == item.entity_id
+                and pending.priority < item.priority
+                and not pending.future.done()
+                for pending in self._pending.values()
+            ):
+                heapq.heappush(self._heaps.setdefault(item.entity_id, []), item)
                 return False
             # Pacing and acquiring the lock can yield after the first check.
             # Recheck immediately before starting to honor a new interlock,

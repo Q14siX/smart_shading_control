@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from copy import deepcopy
 from typing import Any
 
 import voluptuous as vol
@@ -11,7 +13,8 @@ from homeassistant.config_entries import (
     ConfigFlowResult,
     OptionsFlowWithReload,
 )
-from homeassistant.core import callback
+from homeassistant.core import Event, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import selector
 
 from .config_flow_helpers import (
@@ -82,6 +85,7 @@ from .const import (
     RULE_SCOPE_GLOBAL,
     RULE_SCOPE_ROOM,
 )
+from .entity_references import iter_config_entity_id_candidates
 from .global_transfers import (
     append_global_time_rule_to_rooms,
     migration_rule_tombstone,
@@ -92,7 +96,77 @@ from .schedule import normalize_boolean, normalize_rule
 from .schedule_conflicts import first_blocking_conflict
 
 
-class SmartShadingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+class _SourceEntityFlowMixin:
+    """End a settings draft when one of its selected sources is renamed."""
+
+    _source_rename_unsubscribe: Callable[[], None] | None = None
+    _committing_source_data: dict[str, Any] | None = None
+
+    def _draft_source_entity_ids(self) -> set[str]:
+        sources: set[str] = set()
+        for payload in (
+            getattr(self, "_data", {}),
+            getattr(self, "_pending_cover_data", {}),
+            {CONF_COVER_CONTACTS: getattr(self, "_cover_contacts", {})},
+            {CONF_TIME_RULES: [getattr(self, "_rule_draft", {})]},
+        ):
+            sources.update(iter_config_entity_id_candidates(payload))
+        for rename in getattr(self, "_committing_source_renames", ()):
+            if rename["old_entity_id"] in sources:
+                sources.remove(rename["old_entity_id"])
+                sources.add(rename["new_entity_id"])
+        return sources
+
+    @callback
+    def _watch_source_entity_renames(self, manager: Any) -> None:
+        """Track draft-only sources for the lifetime of this active flow."""
+        if self._source_rename_unsubscribe is not None:
+            return
+
+        @callback
+        def renamed(event: Event[er.EventEntityRegistryUpdatedData]) -> None:
+            # Another entry listener may already have ended this flow while
+            # this callback was waiting in the event queue.
+            if self._source_rename_unsubscribe is None:
+                return
+            old = event.data.get("old_entity_id")
+            new = event.data.get("entity_id")
+            if (
+                event.data.get("action") == "update"
+                and isinstance(old, str)
+                and isinstance(new, str)
+                and old != new
+                and old in self._draft_source_entity_ids()
+            ):
+                if self._committing_source_data is None:
+                    manager.async_abort(self.flow_id)
+                else:
+                    self._committing_source_renames.append(
+                        {"old_entity_id": old, "new_entity_id": new}
+                    )
+
+        self._source_rename_unsubscribe = self.hass.bus.async_listen(
+            er.EVENT_ENTITY_REGISTRY_UPDATED, renamed
+        )
+
+    @callback
+    def async_create_entry(self, **kwargs: Any) -> ConfigFlowResult:
+        """Keep committed flows alive while their entry completes setup."""
+        self._committing_source_data = deepcopy(kwargs.get("data", {}))
+        self._committing_source_renames: list[dict[str, str]] = []
+        return super().async_create_entry(**kwargs)
+
+    @callback
+    def async_remove(self) -> None:
+        """Remove the registry subscription on completion or cancellation."""
+        if self._source_rename_unsubscribe is not None:
+            remove = self._source_rename_unsubscribe
+            self._source_rename_unsubscribe = None
+            remove()
+        super().async_remove()
+
+
+class SmartShadingConfigFlow(_SourceEntityFlowMixin, config_entries.ConfigFlow, domain=DOMAIN):
     """Create central settings first, then any number of rooms."""
 
     VERSION = 20
@@ -121,9 +195,23 @@ class SmartShadingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return set(self._room_covers_list())
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        self._watch_source_entity_renames(self.hass.config_entries.flow)
         if _global_entry(self.hass) is None:
             return await self.async_step_global(user_input)
         return await self.async_step_room(user_input)
+
+    async def async_on_create_entry(self, result: ConfigFlowResult) -> ConfigFlowResult:
+        """Pass source changes during entry creation to the durable migration."""
+        from . import _async_finish_source_entity_renames
+
+        if self._committing_source_renames:
+            await _async_finish_source_entity_renames(
+                self.hass,
+                result["result"],
+                self._committing_source_data or {},
+                self._committing_source_renames,
+            )
+        return result
 
     async def async_step_global(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         await self.async_set_unique_id(GLOBAL_UNIQUE_ID)
@@ -271,9 +359,30 @@ class SmartShadingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return await self.async_step_initial_rule_basics(user_input)
 
     async def async_step_finish_room(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        if error := _validate_cover_groups(
+            self._data,
+            covers_in_other_rooms=_covers_in_other_rooms(self.hass),
+            integration_covers=_integration_cover_entities(self.hass),
+        ):
+            return self.async_show_form(
+                step_id="covers",
+                data_schema=_covers_schema(self._data),
+                errors={"base": error},
+            )
         # Central time rules are not stored. A newly created room therefore
         # starts only with rules explicitly added during its own setup.
-        self._data[CONF_TIME_RULES] = list(self._initial_rules)
+        room_covers = self._room_covers()
+        rules = []
+        for original in self._initial_rules:
+            rule = dict(original)
+            rule[CONF_RULE_COVERS] = [
+                cover
+                for cover in as_list(rule.get(CONF_RULE_COVERS))
+                if cover in room_covers
+            ]
+            if rule[CONF_RULE_COVERS]:
+                rules.append(rule)
+        self._data[CONF_TIME_RULES] = rules
         return self.async_create_entry(title=self._room_name(), data=self._data)
 
     async def async_step_initial_rule_basics(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
@@ -349,7 +458,7 @@ class SmartShadingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
 
-class SmartShadingOptionsFlow(OptionsFlowWithReload):
+class SmartShadingOptionsFlow(_SourceEntityFlowMixin, OptionsFlowWithReload):
     """Edit central settings or one room and distribute new rules."""
 
     def __init__(self) -> None:
@@ -549,6 +658,7 @@ class SmartShadingOptionsFlow(OptionsFlowWithReload):
         return updated_entries
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        self._watch_source_entity_renames(self.hass.config_entries.options)
         # The central entry has an update listener for shared coordinator data.
         # It has no runtime platforms of its own, so reloading the central entry
         # would be redundant and is incompatible with OptionsFlowWithReload when
@@ -674,17 +784,7 @@ class SmartShadingOptionsFlow(OptionsFlowWithReload):
                 room_covers = _ordered_covers(user_input)
                 room_cover_set = set(room_covers)
                 self._rule_scope = RULE_SCOPE_ROOM
-                rules = []
-                for rule in self._rules(include_disabled=True):
-                    rule[CONF_RULE_COVERS] = [
-                        cover for cover in rule[CONF_RULE_COVERS] if cover in room_cover_set
-                    ]
-                    if rule[CONF_RULE_COVERS] or not normalize_boolean(
-                        rule.get(CONF_RULE_ENABLED), True
-                    ):
-                        rules.append(rule)
                 self._pending_cover_data = dict(user_input)
-                self._pending_cover_data[CONF_TIME_RULES] = rules
                 current_contacts = dict(self._current().get(CONF_COVER_CONTACTS) or {})
                 self._cover_contacts = {
                     cover: str(contact)
@@ -705,8 +805,35 @@ class SmartShadingOptionsFlow(OptionsFlowWithReload):
             return await self.async_step_covers()
         if self._contact_index >= len(self._contact_queue):
             data = dict(self._pending_cover_data)
-            data[CONF_COVER_CONTACTS] = dict(self._cover_contacts)
             self._pending_cover_data = None
+            if error := _validate_cover_groups(
+                data,
+                covers_in_other_rooms=_covers_in_other_rooms(
+                    self.hass,
+                    exclude_entry_id=self.config_entry.entry_id,
+                ),
+                integration_covers=_integration_cover_entities(self.hass),
+            ):
+                return self.async_show_form(
+                    step_id="covers",
+                    data_schema=_covers_schema(data),
+                    errors={"base": error},
+                )
+            # Contact selection spans several user interactions. Central rule
+            # transfers may have changed the room meanwhile, so prune the
+            # current rules only when the cover assignment is committed.
+            room_cover_set = set(_ordered_covers(data))
+            rules = []
+            for rule in self._rules(include_disabled=True):
+                rule[CONF_RULE_COVERS] = [
+                    cover for cover in rule[CONF_RULE_COVERS] if cover in room_cover_set
+                ]
+                if rule[CONF_RULE_COVERS] or not normalize_boolean(
+                    rule.get(CONF_RULE_ENABLED), True
+                ):
+                    rules.append(rule)
+            data[CONF_TIME_RULES] = rules
+            data[CONF_COVER_CONTACTS] = dict(self._cover_contacts)
             return self._save_options(data)
 
         cover = self._contact_queue[self._contact_index]

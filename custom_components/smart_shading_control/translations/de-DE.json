@@ -595,7 +595,8 @@
           "time_rule_close_blocked_contact": "Nachtabsenkung durch geöffneten Kontakt blockiert",
           "time_rule_close_contact_delay": "Nachtabsenkung wartet nach Kontaktschließung",
           "dynamic_no_solar_heat_gain": "Dynamik: kein ausreichender solarer Wärmeeintrag",
-          "dynamic_inputs_unavailable": "Dynamik: fehlende Eingangsdaten – Position halten"
+          "dynamic_inputs_unavailable": "Dynamik: fehlende Eingangsdaten – Position halten",
+          "time_rule_open_contact": "Nachtregel: geöffnetes Fenster erfordert Öffnung"
         }
       },
       "decision_diagnostics": {
@@ -626,7 +627,8 @@
           "time_rule_close_blocked_contact": "Nachtabsenkung durch geöffneten Kontakt blockiert",
           "time_rule_close_contact_delay": "Nachtabsenkung wartet nach Kontaktschließung",
           "dynamic_no_solar_heat_gain": "Dynamik: kein ausreichender solarer Wärmeeintrag",
-          "dynamic_inputs_unavailable": "Dynamik: fehlende Eingangsdaten – Position halten"
+          "dynamic_inputs_unavailable": "Dynamik: fehlende Eingangsdaten – Position halten",
+          "time_rule_open_contact": "Nachtregel: geöffnetes Fenster erfordert Öffnung"
         }
       },
       "forecast_age": {

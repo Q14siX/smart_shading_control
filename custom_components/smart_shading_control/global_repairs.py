@@ -395,12 +395,19 @@ def update_global_repairs(
         else:
             invalid = not _state_available(state)
             if not invalid:
-                invalid = any(
-                    not dt_util.parse_datetime(
-                        str(state.attributes.get(attribute) or "")
-                    )
-                    for attribute in required_events
-                )
+                try:
+                    for attribute in required_events:
+                        parsed = dt_util.parse_datetime(
+                            str(state.attributes.get(attribute) or "")
+                        )
+                        if parsed is None:
+                            invalid = True
+                            break
+                        if parsed.tzinfo is None:
+                            parsed = parsed.replace(tzinfo=dt_util.UTC)
+                        dt_util.as_local(parsed)
+                except (OverflowError, TypeError, ValueError):
+                    invalid = True
             if invalid:
                 create_issue(
                     hass,

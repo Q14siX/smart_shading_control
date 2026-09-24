@@ -927,6 +927,8 @@ def _entry_data_with_pending_entity_rename(
         }
     )
     data[PENDING_ENTITY_RENAMES_KEY] = normalize_pending_entity_renames(pending)
+    if entry_type(entry) == ENTRY_TYPE_ROOM:
+        data.setdefault("_entity_rename_transaction", uuid4().hex)
     return data
 
 
@@ -937,39 +939,92 @@ async def _async_apply_pending_entity_renames(
     """Apply a staged rename after the old controller completed its unload."""
     if PENDING_ENTITY_RENAMES_KEY not in entry.data:
         return
-    renames = normalize_pending_entity_renames(
-        entry.data.get(PENDING_ENTITY_RENAMES_KEY)
-    )
-    if entry_type(entry) == ENTRY_TYPE_ROOM:
-        try:
-            for suffix in _PERSISTENT_ROOM_STORE_SUFFIXES:
-                store = Store(
-                    hass,
-                    1,
-                    f"{DOMAIN}.{entry.entry_id}.{suffix}",
-                    atomic_writes=True,
-                )
-                stored = await async_load_persistent_store(hass, store)
-                if stored is None:
-                    continue
-                if not isinstance(stored, dict):
-                    raise TypeError(f"Store {store.key} has an invalid structure")
-                migrated = apply_pending_entity_renames(stored, renames)
-                if migrated != stored:
-                    await store.async_save(migrated)
-        except Exception as err:
-            # Keep both the old live references and the marker. A later setup
-            # can safely retry because exact old-to-new substitutions are
-            # idempotent.
-            raise ConfigEntryNotReady(
-                "Could not migrate persistent state after an entity registry rename"
-            ) from err
+    while True:
+        renames = normalize_pending_entity_renames(
+            entry.data.get(PENDING_ENTITY_RENAMES_KEY)
+        )
+        if entry_type(entry) == ENTRY_TYPE_ROOM:
+            transaction = entry.data.get("_entity_rename_transaction")
+            if not isinstance(transaction, str) or not transaction:
+                # Older staged renames have no transaction identifier. Persist it
+                # before touching either Store so a setup retry shares the same ID.
+                transaction = uuid4().hex
+                data = dict(entry.data)
+                data["_entity_rename_transaction"] = transaction
+                hass.config_entries.async_update_entry(entry, data=data)
+            try:
+                for suffix in _PERSISTENT_ROOM_STORE_SUFFIXES:
+                    store = Store(
+                        hass,
+                        1,
+                        f"{DOMAIN}.{entry.entry_id}.{suffix}",
+                        atomic_writes=True,
+                    )
+                    stored = await async_load_persistent_store(hass, store)
+                    if stored is None:
+                        continue
+                    if not isinstance(stored, dict):
+                        raise TypeError(f"Store {store.key} has an invalid structure")
+                    payload = dict(stored)
+                    progress = payload.pop("_entity_rename_progress", None)
+                    completed = 0
+                    if (
+                        isinstance(progress, dict)
+                        and progress.get("transaction") == transaction
+                    ):
+                        completed = progress.get("completed")
+                        if (
+                            type(completed) is not int
+                            or not 0 <= completed <= len(renames)
+                        ):
+                            raise ValueError(f"Store {store.key} has invalid rename progress")
+                    migrated = apply_pending_entity_renames(payload, renames[completed:])
+                    # The payload and checkpoint commit together. Reapplying a
+                    # sequence is not safe when a later source reused an earlier
+                    # source's old ID, even though an individual rename is safe.
+                    migrated["_entity_rename_progress"] = {
+                        "transaction": transaction,
+                        "completed": len(renames),
+                    }
+                    if migrated != stored:
+                        await store.async_save(migrated)
+            except Exception as err:
+                # Keep both the old live references and the marker. A later setup
+                # resumes each Store at its own atomically saved checkpoint.
+                raise ConfigEntryNotReady(
+                    "Could not migrate persistent state after an entity registry rename"
+                ) from err
 
-    data = dict(entry.data)
-    data.pop(PENDING_ENTITY_RENAMES_KEY, None)
-    data = apply_pending_config_entity_renames(data, renames)
-    options = apply_pending_config_entity_renames(dict(entry.options), renames)
-    hass.config_entries.async_update_entry(entry, data=data, options=options)
+        if normalize_pending_entity_renames(
+            entry.data.get(PENDING_ENTITY_RENAMES_KEY)
+        ) != renames:
+            # A registry event may append another rename while this setup waits
+            # for a Store. Resume from each Store's checkpoint before committing
+            # configuration, so no newly staged rename is discarded.
+            continue
+
+        data = dict(entry.data)
+        data.pop(PENDING_ENTITY_RENAMES_KEY, None)
+        data.pop("_entity_rename_transaction", None)
+        data = apply_pending_config_entity_renames(data, renames)
+        options = apply_pending_config_entity_renames(dict(entry.options), renames)
+        # Store migration can yield long enough for new options forms to open.
+        # Close those drafts in the same event-loop turn as the final commit,
+        # so none can restore the source IDs visible before migration finished.
+        _abort_source_entity_options_flows(hass)
+        hass.config_entries.async_update_entry(entry, data=data, options=options)
+
+        return
+
+
+def _abort_source_entity_options_flows(hass: HomeAssistant) -> None:
+    """Discard open settings drafts which can retain source entity references."""
+    options = hass.config_entries.options
+    for configured_entry in hass.config_entries.async_entries(DOMAIN):
+        for flow in options.async_progress_by_handler(
+            configured_entry.entry_id, include_uninitialized=True
+        ):
+            options.async_abort(flow["flow_id"])
 
 
 async def _async_handle_source_entity_rename(
@@ -989,6 +1044,12 @@ async def _async_handle_source_entity_rename(
     ):
         return
 
+    # Open options forms can retain old source IDs even after this entry has
+    # reloaded. Central rule drafts may also refer to another room's covers.
+    # End SSC drafts before migration so a later submit cannot restore stale
+    # references; options flows of other integrations remain untouched.
+    _abort_source_entity_options_flows(hass)
+
     is_global = entry_type(entry) == ENTRY_TYPE_GLOBAL
     data = _entry_data_with_pending_entity_rename(
         entry,
@@ -996,6 +1057,11 @@ async def _async_handle_source_entity_rename(
         new_entity_id,
     )
     hass.config_entries.async_update_entry(entry, data=data)
+
+    if entry.disabled_by is not None:
+        # Keep references durable while disabled without starting its runtime.
+        # The pending rename is applied before the next enabled setup.
+        return
 
     if not await hass.config_entries.async_reload(entry.entry_id):
         _LOGGER.error(
@@ -1021,11 +1087,63 @@ async def _async_handle_source_entity_rename(
         )
 
 
+async def _async_finish_source_entity_renames(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    source_data: dict[str, Any],
+    renames: list[dict[str, str]],
+) -> None:
+    """Finish changes observed between a setup form commit and entry setup."""
+    runtime = hass.data.setdefault(DOMAIN, {})
+    locks = runtime.setdefault(_SOURCE_RENAME_LOCKS_KEY, {})
+    rename_lock = locks.setdefault(entry.entry_id, asyncio.Lock())
+    async with rename_lock:
+        while True:
+            if not any(
+                candidate.entry_id == entry.entry_id
+                for candidate in hass.config_entries.async_entries(DOMAIN)
+            ):
+                return
+            sequence = normalize_pending_entity_renames(renames)
+            current = apply_pending_config_entity_renames(
+                dict(entry.data), entry.data.get(PENDING_ENTITY_RENAMES_KEY)
+            )
+            current.pop(PENDING_ENTITY_RENAMES_KEY, None)
+            current.pop("_entity_rename_transaction", None)
+            expected = dict(source_data)
+            completed = 0 if current == expected else None
+            for index, rename in enumerate(sequence, start=1):
+                expected = apply_pending_config_entity_renames(expected, [rename])
+                if current == expected:
+                    completed = index
+            if completed is None:
+                _LOGGER.warning(
+                    "Source settings for %s changed during setup; retaining the "
+                    "current configuration instead of replaying an older draft",
+                    entry.title,
+                )
+                return
+            if completed == len(sequence):
+                return
+            # Use the longest matching prefix: A -> B -> A may already have
+            # completed, and must not be replayed just because A appears again.
+            rename = sequence[completed]
+            await _async_handle_source_entity_rename(
+                hass,
+                entry,
+                Event(
+                    er.EVENT_ENTITY_REGISTRY_UPDATED,
+                    {"action": "update", "old_entity_id": rename["old_entity_id"],
+                     "entity_id": rename["new_entity_id"]},
+                ),
+            )
+
+
 def _register_source_entity_rename_listener(
     hass: HomeAssistant,
     entry: ConfigEntry,
 ) -> Callable[[], None] | None:
-    """Track registry renames with dynamic filtering across reload boundaries."""
+    """Track source renames for the Config Entry's complete registered lifetime."""
     entity_ids = _entry_tracked_source_entity_ids(entry)
     if not entity_ids:
         return None
@@ -1091,7 +1209,9 @@ def _register_source_entity_rename_listener(
                 current_runtime.pop(_SOURCE_RENAME_UNSUBSCRIBERS_KEY, None)
 
     unsubscribers[entry.entry_id] = remove
-    entry.async_on_unload(remove)
+    # A rename can arrive while platforms or persistent Stores are reloading.
+    # Keep this lightweight listener until entry removal, otherwise a second
+    # rename during that gap permanently loses the source association.
     return remove
 
 
@@ -1120,6 +1240,7 @@ def _remove_source_entity_rename_listener(
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up central settings or one smart shading room."""
+    _register_source_entity_rename_listener(hass, entry)
     await _async_apply_pending_entity_renames(hass, entry)
     if entry_type(entry) == ENTRY_TYPE_GLOBAL:
         _distribute_pending_global_time_rules(hass, entry)
