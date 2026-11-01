@@ -1,5 +1,7 @@
 # Smart Shading Control – Release Notes
 
+<a href="https://buymeacoffee.com/q14six"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" width="200"></a>
+
 ## 20260924.160135 – Fahrbefehle und Zustandswiederherstellung / Commands and State Recovery
 
 **Datum / Date:** 24. September 2026 / 24 September 2026  
